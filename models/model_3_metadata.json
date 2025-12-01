@@ -1,0 +1,11 @@
+{
+  "product_id": 3,
+  "model_name": "arima",
+  "metrics": {
+    "mape": 0.0,
+    "smape": 0.0,
+    "rmse": 0.0,
+    "timestamp": "2025-11-28T15:52:54.654783"
+  },
+  "save_time": "2025-11-28T15:52:54.692785"
+}

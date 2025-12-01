@@ -1,0 +1,163 @@
+version: '3.8'
+
+services:
+  # API网关
+  api-gateway:
+    build:
+      context: ./api-gateway
+      dockerfile: Dockerfile
+    ports:
+      - "8000:8000"
+    environment:
+      - DATA_SERVICE_URL=http://data-service:8001
+      - FEATURE_SERVICE_URL=http://feature-service:8002
+      - FORECAST_SERVICE_URL=http://forecast-service:8003
+      - OPTIMIZATION_SERVICE_URL=http://optimization-service:8004
+      - REPLENISHMENT_SERVICE_URL=http://replenishment-service:8005
+    depends_on:
+      - data-service
+      - feature-service
+      - forecast-service
+      - optimization-service
+      - replenishment-service
+    networks:
+      - supplychain-network
+
+  # 数据服务
+  data-service:
+    build:
+      context: ./services/data-service
+      dockerfile: Dockerfile
+    ports:
+      - "8001:8001"
+    environment:
+      - DATA_DIR=/app/data
+    volumes:
+      - ./data:/app/data
+    networks:
+      - supplychain-network
+
+  # 特征服务
+  feature-service:
+    build:
+      context: ./services/feature-service
+      dockerfile: Dockerfile
+    ports:
+      - "8002:8002"
+    environment:
+      - DATA_DIR=/app/data
+      - FEATURES_DIR=/app/features
+    volumes:
+      - ./data:/app/data
+      - ./features:/app/features
+    networks:
+      - supplychain-network
+
+  # 预测服务
+  forecast-service:
+    build:
+      context: ./services/forecast-service
+      dockerfile: Dockerfile
+    ports:
+      - "8003:8003"
+    environment:
+      - DATA_DIR=/app/data
+      - MODELS_DIR=/app/models
+    volumes:
+      - ./data:/app/data
+      - ./models:/app/models
+    networks:
+      - supplychain-network
+
+  # 优化服务
+  optimization-service:
+    build:
+      context: ./services/optimization-service
+      dockerfile: Dockerfile
+    ports:
+      - "8004:8004"
+    environment:
+      - DATA_DIR=/app/data
+    volumes:
+      - ./data:/app/data
+    networks:
+      - supplychain-network
+
+  # 综合服务
+  replenishment-service:
+    build:
+      context: ./services/replenishment-service
+      dockerfile: Dockerfile
+    ports:
+      - "8005:8005"
+    environment:
+      - DATA_SERVICE_URL=http://data-service:8001
+      - FEATURE_SERVICE_URL=http://feature-service:8002
+      - FORECAST_SERVICE_URL=http://forecast-service:8003
+      - OPTIMIZATION_SERVICE_URL=http://optimization-service:8004
+    depends_on:
+      - data-service
+      - feature-service
+      - forecast-service
+      - optimization-service
+    networks:
+      - supplychain-network
+
+  # Redis - 用于事件驱动架构和缓存
+  redis:
+    image: redis:7.0-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    networks:
+      - supplychain-network
+
+  # RabbitMQ - 用于可靠消息传递
+  rabbitmq:
+    image: rabbitmq:3.12-management
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    volumes:
+      - rabbitmq-data:/var/lib/rabbitmq
+    environment:
+      - RABBITMQ_DEFAULT_USER=admin
+      - RABBITMQ_DEFAULT_PASS=admin
+    networks:
+      - supplychain-network
+
+  # 监控服务 - Prometheus
+  prometheus:
+    image: prom/prometheus:v2.46.0
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml
+      - prometheus-data:/prometheus
+    networks:
+      - supplychain-network
+
+  # 监控服务 - Grafana
+  grafana:
+    image: grafana/grafana:10.1.0
+    ports:
+      - "3000:3000"
+    volumes:
+      - grafana-data:/var/lib/grafana
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+    depends_on:
+      - prometheus
+    networks:
+      - supplychain-network
+
+volumes:
+  redis-data:
+  rabbitmq-data:
+  prometheus-data:
+  grafana-data:
+
+networks:
+  supplychain-network:
+    driver: bridge
