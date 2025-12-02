@@ -35,66 +35,162 @@
     - 特征持久化和管理
     - 支持批量特征计算和更新
     - 特征重要性分析
+15. **灵活的数据接入层**：
+    - 支持多种数据源类型（CSV、数据库、API）
+    - 数据源工厂模式，支持动态配置
+    - 数据转换器和验证器，确保数据一致性
+    - 数据源降级机制，提高系统可靠性
+16. **生产数据对接支持**：
+    - 支持与企业生产数据库直接对接
+    - 支持通过API获取外部数据
+    - 环境变量配置，方便不同环境部署
+    - 支持数据格式转换和验证
+17. **A/B测试框架**：支持不同预测模型和补货策略的对比测试
+18. **模型可解释性**：提供模型预测结果的解释功能，增强决策可信度
+19. **预测置信区间**：为预测结果提供置信区间，支持风险评估
+20. **系统状态监控**：实时监控系统运行状态和模型性能
 
 ## 项目结构
 
 ```
 supplychain/
+├── .env                     # 环境配置文件
+├── .github/                 # GitHub配置目录
+├── .idea/                   # IDE配置目录
+├── .pytest_cache/           # pytest缓存目录
 ├── .venv/                   # 虚拟环境目录
+├── ab_test_results/         # A/B测试结果目录
+├── api-gateway/             # API网关配置
+├── backups/                 # 备份目录
+├── check_null_bytes.py      # 空字节检查脚本
 ├── config/                  # 配置文件目录
 │   └── safety_stock_params_*.json  # 安全库存参数配置
+├── config_example.env       # 配置文件示例
 ├── data/                    # 数据目录
-│   ├── sample_demand_data.csv  # 示例需求数据
 │   ├── inventory_daily.csv      # 库存日报表
-│   ├── purchase_orders.csv      # 采购订单表
-│   ├── suppliers.csv            # 供应商表
 │   ├── items.csv                # 产品表
 │   ├── locations.csv            # 位置表
-│   ├── forecast_output.csv      # 预测输出表
-│   └── optimal_plan.csv         # 最优计划表
+│   ├── optimal_plan.csv         # 最优计划表
+│   ├── purchase_orders.csv      # 采购订单表
+│   ├── sample_demand_data.csv  # 示例需求数据
+│   ├── suppliers.csv            # 供应商表
+│   └── forecast_output.csv      # 预测输出表
+├── DEPLOYMENT.md            # 部署文档
+├── demo.py                  # 功能演示脚本
+├── docker-compose.yml       # Docker Compose配置
 ├── features/                # 特征存储目录
 │   ├── model_selection_tags.json  # 模型选择标签
 │   └── sku_location_features.json  # SKU×仓库特征数据
+├── interpretations/         # 模型解释结果目录
+├── logs/                    # 日志目录
+│   ├── error.log           # 错误日志
+│   ├── general.log         # 通用日志
+│   └── performance.log     # 性能日志
 ├── metrics/                 # 模型指标目录
+├── MODEL_USAGE_GUIDE.md     # 模型使用指南
 ├── models/                  # 模型保存目录
-├── src/                     # 源代码目录
-│   ├── __pycache__/         # 编译后的Python文件
-│   ├── api.py               # REST API服务模块
-│   ├── automated_replenishment.py  # 自动补单模块
-│   ├── dashboard.py         # 数据仪表盘模块
-│   ├── data_processor.py    # 数据处理模块
-│   ├── feature_store.py     # Feature Store模块
-│   ├── forecast_models.py   # 预测模型选择模块
-│   ├── main.py              # 主程序
-│   ├── milp_optimizer.py    # MILP优化模块
-│   ├── mlops_engine.py      # MLOps引擎模块
-│   └── simulated_data.py    # 模拟数据生成模块
-├── README.md                # 项目说明
+├── monitoring/              # 监控配置目录
 ├── requirements.txt         # 依赖列表
+├── services/                # 服务配置目录
+├── src/                     # 源代码目录
+│   ├── api/                 # API服务模块
+│   │   ├── api.py           # REST API实现
+│   │   ├── dashboard.py     # 数据仪表盘
+│   │   └── __init__.py
+│   ├── data/                # 数据处理模块
+│   │   ├── data_processor.py    # 数据处理
+│   │   ├── data_source.py       # 数据接入层
+│   │   ├── data_transformer.py  # 数据转换
+│   │   ├── data_warehouse.py    # 数据仓库
+│   │   ├── feature_store.py     # Feature Store
+│   │   ├── __init__.py
+│   │   └── simulated_data.py    # 模拟数据生成
+│   ├── forecast/            # 预测模型模块
+│   │   ├── forecast_models.py   # 预测模型选择
+│   │   ├── __init__.py
+│   │   └── interpretability.py  # 模型可解释性
+│   ├── mlops/               # MLOps引擎模块
+│   │   ├── ab_testing/      # A/B测试模块
+│   │   ├── __init__.py
+│   │   ├── mlops_engine.py      # MLOps核心引擎
+│   │   └── real_time_processor.py  # 实时数据处理
+│   ├── replenishment/       # 补货优化模块
+│   │   ├── automated_replenishment.py  # 自动补单
+│   │   ├── __init__.py
+│   │   └── milp_optimizer.py           # MILP优化
+│   └── system/              # 系统管理模块
+│       ├── backup_manager.py      # 备份管理
+│       ├── cache_manager.py       # 缓存管理
+│       ├── __init__.py
+│       ├── logging_manager.py     # 日志管理
+│       ├── main.py                # 主程序入口
+│       └── version_manager.py     # 版本管理
 ├── start_api.py             # API服务启动脚本
-├── test_feature_store.py    # Feature Store测试脚本
-└── verify_feature_store.py  # Feature Store验证脚本
+├── test_models.py           # 模型测试脚本
+├── tests/                   # 测试目录
+│   ├── test_ab_testing.py        # A/B测试测试脚本
+│   ├── test_devops.py            # DevOps测试脚本
+│   ├── test_feature_store.py     # Feature Store测试脚本
+│   ├── test_models.py            # 模型测试脚本
+│   ├── test_optimizations.py     # 优化测试脚本
+│   └── test_performance.py       # 性能测试脚本
+├── versions/                # 版本管理目录
+└── README.md                # 项目说明
 ```
 
 ## 安装指南
+
+### 环境要求
+- Python 3.7+
+- 足够的内存和磁盘空间（建议至少8GB RAM）
+
+### 安装步骤
 
 1. 克隆或下载项目到本地
 2. 安装依赖：
    ```
    pip install -r requirements.txt
    ```
-   依赖已包含MILP求解器OR-Tools和API服务所需的FastAPI、uvicorn等组件。
+   依赖已包含MILP求解器OR-Tools和API服务所需的FastAPI、uvicorn等组件，以及新的数据接入层所需的python-dotenv、redis、psycopg2-binary、requests等组件。
+3. 配置数据源：
+   - 复制`config_example.env`文件为`.env`
+   - 根据实际情况修改`.env`文件中的配置项
+   - 支持配置多种数据源类型（CSV、数据库、API）
+   - 支持配置缓存类型和并行计算参数
 
 ## 使用说明
+
+### 配置数据源
+
+1. 复制配置文件示例：
+   ```
+   cp config_example.env .env
+   ```
+
+2. 编辑`.env`文件，配置数据源：
+   ```
+   # 数据源配置
+   DATA_SOURCE_TYPE=csv  # 可选值: csv, database, api
+   
+   # CSV数据源配置
+   # DATA_DIR=data
+   
+   # 数据库数据源配置
+   # DATABASE_CONNECTION_STRING=postgresql://username:password@localhost:5432/supplychain
+   
+   # API数据源配置
+   # API_BASE_URL=http://localhost:8000/api
+   # API_TOKEN=your_api_token
+   ```
 
 ### 运行主程序
 
 ```
-python src/main.py
+python src/system/main.py
 ```
 
 程序将执行以下步骤：
-1. 生成或加载模拟数据（7个数据表）
+1. 从配置的数据源加载数据（或生成模拟数据）
 2. 对每个产品进行数据预处理和模型选择
 3. 训练最佳预测模型
 4. 进行需求预测
@@ -117,6 +213,18 @@ API服务将启动在 `http://localhost:8000`，提供以下功能：
 - 数据接口：`http://localhost:8000/api/`
 - 支持与Power BI等可视化工具集成
 
+### 运行DEMO
+
+```
+python demo.py
+```
+
+### 运行测试
+
+```
+python -m pytest tests/ -v
+```
+
 ### API端点说明
 
 - `/api/items` - 获取所有产品信息
@@ -132,22 +240,22 @@ API服务将启动在 `http://localhost:8000`，提供以下功能：
 
 在主程序运行结束后，系统会询问是否查看数据仪表盘，输入 `y` 即可显示包含库存水平、采购订单和模型性能等维度的可视化图表。
 
-### 模块说明
+## 模块说明
 
-#### 数据处理模块（data_processor.py）
+### 数据处理模块（data_processor.py）
 - 加载和预处理数据
 - 处理缺失值和特征工程
 - 分割训练集和测试集
 - 比较实际需求和预测需求
 
-#### 预测模型选择模块（forecast_models.py）
+### 预测模型选择模块（forecast_models.py）
 - 实现多种预测模型（ARIMA、Holt-Winters、线性回归、随机森林、梯度提升、支持向量回归等）
 - 自动选择最佳模型
 - 模型训练、预测和评估
 - 模型保存和加载
 - 模型更新
 
-#### MILP优化模块（milp_optimizer.py）
+### MILP优化模块（milp_optimizer.py）
 - 使用OR-Tools创建增强的MILP模型
 - 定义目标函数和约束条件
 - 支持多仓库库存调拨
@@ -155,23 +263,32 @@ API服务将启动在 `http://localhost:8000`，提供以下功能：
 - 求解模型（默认使用SCIP求解器，支持CBC等多种求解器）
 - 提取最优解
 
-#### 自动补单模块（automated_replenishment.py）
+### 自动补单模块（automated_replenishment.py）
 - 实现多种补货策略（ROP、Order-up-to、混合策略）
 - 生成自动补货建议
 - 支持多级审批工作流
 - 管理采购订单状态
 
-#### 模拟数据生成模块（simulated_data.py）
+### 模拟数据生成模块（simulated_data.py）
 - 生成符合实际业务场景的7个数据表
 - 支持自定义数据规模和分布
 - 生成的数据可直接用于系统测试
 
-#### API服务模块（api.py）
+### 数据接入层模块（data_source.py）
+- 抽象数据源基类，支持多种数据源扩展
+- CSV数据源实现，支持从本地文件加载数据
+- 数据库数据源实现，支持PostgreSQL等数据库
+- API数据源实现，支持从REST API获取数据
+- 模拟数据源实现，用于测试和演示
+- 数据源工厂，支持动态创建数据源实例
+- 数据转换器和验证器，确保数据一致性
+
+### API服务模块（api.py）
 - 提供REST API接口，支持与Power BI等可视化工具集成
 - 包含8个核心数据接口
 - 支持CORS跨域访问
 
-#### Feature Store模块（feature_store.py）
+### Feature Store模块（feature_store.py）
 - SKU×仓库维度特征计算
 - 统计特征：CV（变异系数）、季节强度、间歇性指数
 - 模型选择标签自动生成
@@ -199,144 +316,110 @@ API服务将启动在 `http://localhost:8000`，提供以下功能：
 - 管理系统状态
 - 集成Feature Store功能
 
-## 配置说明
+## 性能优化
 
-### 预测模型配置
+### GPU加速
 
-可以配置以下预测模型参数：
-- 模型类型：ARIMA、Holt-Winters、线性回归、随机森林、梯度提升等
-- 模型评估指标：MAPE、MAE、RMSE等
-- 模型选择策略：自动选择最佳模型
+系统支持XGBoost等模型的GPU加速，启用方法：
 
-### MILP优化配置
+```python
+# 初始化模型选择器时启用GPU
+model_selector = ForecastModelSelector(use_gpu=True)
+```
 
-可以配置以下优化参数：
-- 求解器选择：SCIP、CBC、GLOP等
-- 成本参数：订购成本、持有成本、缺货成本、调拨成本
-- 约束条件：
-  - 最大订货量
-  - 最小订货量
-  - 最大库存
-  - 供应能力约束
-  - 调拨能力约束
-  - 服务水平约束
+**注意**：需要安装GPU版本的XGBoost和相应的GPU驱动。
 
-### 补货策略配置
+### 并行计算
 
-支持以下补货策略：
-- ROP（再订货点）策略
-- Order-up-to（目标库存）策略
-- 混合策略
+系统支持多进程并行计算，可在`data_processor.py`和其他模块中配置并行度。
 
-### 自动补单配置
+### 缓存机制
 
-可以配置以下自动补单参数：
-- 审批流程：多级审批工作流
-- 通知机制：自动通知相关人员
-- 例外处理：异常情况处理规则
+系统使用内存缓存和可选的Redis分布式缓存，提高频繁访问数据的响应速度：
 
-### 模拟数据生成配置
+```python
+from src.system.cache_manager import CacheManager
 
-可以配置以下模拟数据参数：
-- 数据规模：产品数量、时间范围
-- 分布参数：需求分布、成本分布
-- 业务规则：供应商关系、库存政策
+# 初始化缓存管理器（distributed=True启用Redis）
+cache_manager = CacheManager(distributed=False)  # 仅使用内存缓存
+```
 
-### API服务配置
+## 监控与维护
 
-可以配置以下API服务参数：
-- 服务端口：默认8000
-- 主机地址：默认0.0.0.0
-- CORS配置：允许的源、方法、头部
-- 自动重载：开发模式下启用
+### 日志查看
 
-### 系统配置
+系统日志保存在`logs/`目录下：
+- `general.log`：通用日志
+- `error.log`：错误日志
+- `performance.log`：性能日志
 
-可以配置以下系统参数：
-- 数据保存路径
-- 日志级别
-- 并行处理设置
-- 模型保存路径
+### 模型监控
 
-## 数据格式
+使用MLOps引擎监控模型性能和数据漂移：
 
-系统生成并使用以下数据表：
+```python
+from src.mlops.mlops_engine import MLOpsEngine
 
-### 特征相关数据
+# 初始化MLOps引擎
+mlops_engine = MLOpsEngine()
 
-#### 1. SKU×仓库特征数据（sku_location_features.json）
-- `item_id`：产品ID
-- `location_id`：位置ID
-- `cv`：变异系数
-- `seasonality_strength`：季节强度
-- `intermittency_index`：间歇性指数
-- `promotion_flag`：促销标记
-- `feature_1`-`feature_5`：其他统计特征
+# 监控模型性能
+model_performance = mlops_engine.monitor_model_performance()
 
-#### 2. 模型选择标签数据（model_selection_tags.json）
-- `item_id`：产品ID
-- `location_id`：位置ID
-- `model_tag`：模型选择标签（如'high_seasonality'、'intermittent'等）
+# 检测数据漂移
+drift_results = mlops_engine.detect_data_drift()
+```
 
-### 核心业务数据表
+### 定期维护任务
 
-系统生成并使用以下7个核心业务数据表：
+- 定期更新模型：使用新数据重新训练模型
+- 清理日志文件：避免日志文件过大
+- 备份模型和数据：定期备份`models/`和`data/`目录
 
-### 1. InventoryDaily（库存日报表）
-- `date`：日期
-- `item_id`：产品ID
-- `location_id`：位置ID
-- `on_hand_qty`：当前库存数量
-- `on_order_qty`：已订购未到货数量
-- `demand_qty`：日需求数量
+## 常见问题与故障排除
 
-### 2. PurchaseOrders（采购订单表）
-- `order_id`：订单ID
-- `item_id`：产品ID
-- `supplier_id`：供应商ID
-- `order_date`：订单日期
-- `order_qty`：订单数量
-- `cost_per_unit`：单位成本
-- `status`：订单状态
-- `due_date`：预计到货日期
+### 安装问题
 
-### 3. Suppliers（供应商表）
-- `supplier_id`：供应商ID
-- `supplier_name`：供应商名称
-- `lead_time_days`：提前期（天）
-- `min_order_qty`：最小订货量
-- `price_per_unit`：单位价格
+**问题**：安装依赖时出现错误
+**解决方案**：
+- 确保使用Python 3.7+版本
+- 尝试升级pip：`pip install --upgrade pip`
+- 逐个安装依赖，定位具体问题：`pip install <package_name>`
 
-### 4. Items（产品表）
-- `item_id`：产品ID
-- `item_name`：产品名称
-- `category`：产品类别
-- `unit_of_measure`：计量单位
-- `safety_stock`：安全库存
+### 运行问题
 
-### 5. Locations（位置表）
-- `location_id`：位置ID
-- `location_name`：位置名称
-- `location_type`：位置类型（仓库/门店）
+**问题**：无法连接Redis
+**解决方案**：
+- 确保Redis服务器已启动
+- 检查Redis连接参数（主机、端口、密码）
+- 在初始化CacheManager时设置`distributed=False`，使用内存缓存
 
-### 6. ForecastOutput（预测输出表）
-- `forecast_id`：预测ID
-- `item_id`：产品ID
-- `date`：日期
-- `forecast_qty`：预测数量
-- `model_name`：使用的模型名称
-- `confidence_level`：置信水平
+**问题**：GPU加速无法使用
+**解决方案**：
+- 检查是否安装了GPU版本的XGBoost：`pip install xgboost-gpu`
+- 确保GPU驱动已正确安装
+- 检查CUDA版本是否与XGBoost兼容
+- 尝试在初始化模型选择器时设置`use_gpu=False`，使用CPU版本
 
-### 7. OptimalPlan（最优计划表）
-- `plan_id`：计划ID
-- `item_id`：产品ID
-- `date`：日期
-- `optimal_order_qty`：最优订货量
-- `safety_stock_level`：安全库存水平
-- `reorder_point`：再订货点
-- `order_up_to_level`：目标库存水平
+**问题**：MILP优化求解缓慢
+**解决方案**：
+- 减少优化问题的规模（产品数量、时间范围）
+- 调整求解器参数，设置适当的求解时间限制
+- 尝试使用不同的求解器
 
-示例数据格式见`data/`目录下的各个CSV文件
+### API服务问题
+
+**问题**：API服务无法启动
+**解决方案**：
+- 检查端口是否被占用：`netstat -ano | findstr :8000`
+- 尝试使用不同的端口：修改`start_api.py`中的`PORT`变量
+- 检查依赖是否安装完整
+
+**问题**：API返回错误
+**解决方案**：
+- 查看API文档，确保请求格式正确
+- 检查系统日志，查看具体错误信息
+- 确保数据文件存在且格式正确
 
 ## 扩展说明
 
@@ -357,8 +440,10 @@ API服务将启动在 `http://localhost:8000`，提供以下功能：
 ### 数据扩展
 
 - 支持添加新的数据源
+- 在`data_source.py`中实现新的数据源类
 - 在`data_processor.py`中添加新的数据加载和处理逻辑
 - 在`simulated_data.py`中扩展模拟数据生成
+- 支持通过环境变量动态配置数据源
 
 ### 策略扩展
 
@@ -381,76 +466,10 @@ API服务将启动在 `http://localhost:8000`，提供以下功能：
 - SQLAlchemy (用于数据管理)
 - feature-engine (用于特征工程)
 - json (用于特征数据持久化)
-
-## 未来改进方向
-
-### 一、预测模型优化
-1. 扩展深度学习模型支持（LSTM、Transformer、Prophet等）
-2. 引入间歇性需求模型（Croston方法、SBA方法等）
-3. 实现模型融合策略，结合多种模型优势
-4. 添加超参数自动优化机制
-5. 实现模型动态权重调整
-
-### 二、特征工程与Feature Store优化
-6. 扩展Feature Store功能，支持更多特征类型
-7. 实现特征生命周期管理
-8. 添加特征监控和漂移检测
-9. 支持特征版本控制
-10. 整合外部数据源特征（如天气、节假日、市场趋势等）
-11. 实现实时特征计算和更新
-12. 添加特征重要性分析和解释功能
-13. 优化特征计算性能，支持大规模数据处理
-
-### 三、MILP优化模型优化
-14. 实现多目标优化（成本、服务水平、库存周转率等）
-15. 开发启发式算法和元启发式算法，提高求解效率
-16. 支持更多复杂约束条件（如供应商产能、运输时间窗等）
-17. 实现分级优化策略，处理大规模问题
-18. 支持多种求解器和优化算法
-
-### 四、数据处理与质量优化
-19. 实现智能异常检测和数据清洗
-20. 建立数据质量评估和监控机制
-21. 支持多源数据集成和标准化
-22. 实现数据血缘追踪
-23. 优化数据加载和转换性能
-
-### 五、系统性能与扩展性优化
-24. 实现并行计算和分布式处理
-25. 采用微服务架构，支持模块独立部署
-26. 优化API服务性能和响应速度
-27. 支持水平扩展，处理大规模数据和请求
-28. 实现缓存机制，提高频繁访问数据的响应速度
-
-### 六、监控与可解释性优化
-29. 添加更多数据可视化功能和交互式仪表盘
-30. 实现模型性能监控和告警机制
-31. 添加预测结果解释功能（SHAP、LIME等）
-32. 实现供应链决策路径可视化
-33. 开发实时监控面板，展示关键指标
-
-### 七、业务价值与落地优化
-34. 实现A/B测试框架，评估不同策略效果
-35. 开发场景化定制功能，支持不同行业需求
-36. 添加供应链风险分析和模拟功能
-37. 实现预测性维护和设备故障预警集成
-38. 开发ROI分析工具，量化系统价值
-
-### 八、自动化与运维优化
-39. 实现更灵活的配置管理
-40. 支持实时数据和流式处理
-41. 添加自动化测试和CI/CD流程
-42. 实现自动化模型更新和重训练
-43. 开发运维监控和日志分析系统
-44. 支持多环境部署（开发、测试、生产）
-45. 实现配置版本控制
-
-### 九、其他改进方向
-46. 支持多用户协作和权限管理
-47. 实现更复杂的供应链网络优化
-48. 添加更多高级分析功能
-49. 支持移动端访问和监控
-50. 开发API文档自动生成和更新机制
+- python-dotenv (用于环境变量配置)
+- redis (用于分布式缓存)
+- psycopg2-binary (用于PostgreSQL数据库连接)
+- requests (用于API数据源连接)
 
 ## 许可证
 

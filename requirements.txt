@@ -9,3 +9,7 @@ scipy
 joblib
 fastapi
 uvicorn
+python-dotenv
+redis
+psycopg2-binary
+requests

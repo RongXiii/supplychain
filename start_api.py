@@ -7,7 +7,11 @@
 import uvicorn
 import sys
 import os
+from dotenv import load_dotenv
 import argparse
+
+# 加载.env文件
+load_dotenv()
 
 # 添加src目录到Python路径
 sys.path.append(os.path.join(os.path.dirname(__file__), 'src'))
@@ -35,7 +39,7 @@ if __name__ == "__main__":
     
     # 启动API服务
     uvicorn.run(
-        "src.api:app",
+        "api.api:app",
         host=args.host,
         port=args.port,
         workers=args.workers,

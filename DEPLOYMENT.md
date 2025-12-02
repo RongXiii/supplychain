@@ -28,10 +28,13 @@
 在部署前，请确保您的环境满足以下条件：
 
 - Docker 20.10+ 
-- Docker Compose 1.29+ 或 Docker Desktop 2.2.0+
+- Docker Compose 1.29+ 或 Docker Desktop 2.2.0+ 
 - 至少 4GB 可用内存
 - 至少 20GB 可用磁盘空间
 - Git（可选，用于克隆代码）
+- 如果使用数据库数据源：PostgreSQL 12+ 或其他兼容数据库
+- 如果使用API数据源：可访问的API服务和有效的API令牌
+- 如果使用Redis缓存：Redis 6.0+
 
 ## 架构组件
 
@@ -41,37 +44,50 @@
 - **功能**：统一服务入口，请求路由，负载均衡
 - **访问地址**：http://localhost:8000
 
-### 2. 数据服务
+### 2. 数据接入层
+
+- **功能**：支持多种数据源接入
+- **支持的数据源类型**：
+  - CSV文件
+  - 数据库（PostgreSQL、MySQL等）
+  - REST API
+  - 模拟数据（用于测试和演示）
+- **核心组件**：
+  - 数据源工厂：动态创建数据源实例
+  - 数据转换器：确保数据格式一致性
+  - 数据验证器：验证数据完整性和合法性
+
+### 3. 数据服务
 
 - **端口**：8001
 - **功能**：数据加载、预处理、分割和管理
 - **访问地址**：http://localhost:8001
 
-### 3. 特征服务
+### 4. 特征服务
 
 - **端口**：8002
 - **功能**：特征计算、特征存储和模型选择标签生成
 - **访问地址**：http://localhost:8002
 
-### 4. 预测服务
+### 5. 预测服务
 
 - **端口**：8003
 - **功能**：需求预测、模型选择和模型管理
 - **访问地址**：http://localhost:8003
 
-### 5. 优化服务
+### 6. 优化服务
 
 - **端口**：8004
 - **功能**：库存优化、MILP模型求解和采购订单生成
 - **访问地址**：http://localhost:8004
 
-### 6. 综合服务
+### 7. 综合服务
 
 - **端口**：8005
 - **功能**：整合所有服务，提供完整的补货流程
 - **访问地址**：http://localhost:8005
 
-### 7. 支持服务
+### 8. 支持服务
 
 - **Redis**：端口 6379，用于事件驱动架构和缓存
 - **RabbitMQ**：端口 5672（AMQP）和 15672（管理界面），用于可靠消息传递
@@ -87,15 +103,62 @@ git clone <repository-url>
 cd <project-directory>
 ```
 
-### 2. 准备数据
+### 2. 配置环境变量
 
+创建 `.env` 文件，配置数据源和系统参数：
+
+```bash
+cp config_example.env .env
+```
+
+编辑 `.env` 文件，根据实际情况配置以下参数：
+
+```
+# 数据源配置
+DATA_SOURCE_TYPE=csv  # 可选值: csv, database, api
+
+# CSV数据源配置
+DATA_DIR=data
+
+# 数据库数据源配置
+# DATABASE_CONNECTION_STRING=postgresql://username:password@localhost:5432/supplychain
+
+# API数据源配置
+# API_BASE_URL=http://localhost:8000/api
+# API_TOKEN=your_api_token
+
+# 缓存配置
+# CACHE_TYPE=redis  # 可选值: memory, redis
+# REDIS_URL=redis://localhost:6379/0
+
+# 并行计算配置
+PARALLEL_MODE=true
+
+# GPU加速配置
+GPU_ENABLED=false
+
+# 日志级别
+LOG_LEVEL=INFO
+```
+
+### 3. 准备数据
+
+根据配置的数据源类型，准备相应的数据：
+
+#### CSV数据源
 确保 `data` 目录中包含所需的数据文件。如果没有数据文件，可以运行以下命令生成示例数据：
 
 ```bash
-python src/generate_sample_data.py
+python src/system/main.py  # 主程序会自动生成示例数据
 ```
 
-### 3. 构建和启动服务
+#### 数据库数据源
+确保数据库已创建，并且包含所需的表结构和数据。
+
+#### API数据源
+确保API服务可访问，并且有有效的API令牌。
+
+### 4. 构建和启动服务
 
 使用 Docker Compose 构建和启动所有服务：
 
@@ -107,7 +170,19 @@ docker-compose up -d
 docker compose up -d
 ```
 
-### 4. 检查服务状态
+### 5. 数据接入层验证
+
+启动服务后，可以验证数据接入层是否正常工作：
+
+```bash
+# 检查数据服务日志，确认数据加载成功
+docker compose logs -f data-service
+
+# 测试API端点，验证数据是否可以正常访问
+curl http://localhost:8000/api/items
+```
+
+### 6. 检查服务状态
 
 运行以下命令检查所有服务的状态：
 
@@ -119,7 +194,7 @@ docker-compose ps
 docker compose ps
 ```
 
-### 5. 查看日志
+### 7. 查看日志
 
 要查看特定服务的日志，请运行：
 
@@ -135,6 +210,12 @@ docker compose logs -f <service-name>
 
 ```bash
 docker compose logs -f api-gateway
+```
+
+查看数据服务日志：
+
+```bash
+docker compose logs -f data-service
 ```
 
 ## 服务访问
@@ -253,12 +334,22 @@ Grafana 用于可视化监控数据，访问地址：http://localhost:3000
 
 ### 2. 数据加载失败
 
-**问题**：数据服务无法加载数据文件
+**问题**：数据服务无法加载数据
 
 **解决方案**：
-- 检查数据文件是否存在于 `data` 目录中
-- 检查文件权限，确保 Docker 容器可以访问
-- 检查数据文件格式是否正确
+- 检查数据源类型配置是否正确：`DATA_SOURCE_TYPE=csv`
+- 对于CSV数据源：
+  - 检查数据文件是否存在于配置的 `DATA_DIR` 目录中
+  - 检查文件权限，确保 Docker 容器可以访问
+  - 检查数据文件格式是否正确
+- 对于数据库数据源：
+  - 检查数据库连接字符串是否正确
+  - 检查数据库服务是否运行
+  - 检查数据库用户是否有足够的权限
+- 对于API数据源：
+  - 检查API基础URL是否正确
+  - 检查API令牌是否有效
+  - 检查API服务是否可访问
 
 ### 3. 预测服务报错
 
@@ -277,6 +368,26 @@ Grafana 用于可视化监控数据，访问地址：http://localhost:3000
 - 调整 MILP 模型的约束条件，减少变量数量
 - 增加优化服务的资源限制
 - 考虑使用更强大的求解器
+
+### 5. 数据源切换失败
+
+**问题**：切换数据源类型后，系统无法正常运行
+
+**解决方案**：
+- 确保 `.env` 文件中的 `DATA_SOURCE_TYPE` 配置正确
+- 确保对应数据源的连接信息配置正确
+- 重启所有服务：`docker compose restart`
+- 检查日志，确认具体错误信息
+
+### 6. 缓存服务无法连接
+
+**问题**：系统无法连接到Redis缓存服务
+
+**解决方案**：
+- 检查Redis服务是否运行
+- 检查 `REDIS_URL` 配置是否正确
+- 检查网络配置，确保服务可以访问Redis
+- 考虑切换到内存缓存：`CACHE_TYPE=memory`
 
 ## 扩展与维护
 

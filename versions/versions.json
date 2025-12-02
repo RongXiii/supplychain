@@ -1,0 +1,22 @@
+{
+  "versions": [
+    {
+      "version": "v1.0.0",
+      "description": "\u6d4b\u8bd5\u7248\u672c",
+      "timestamp": "2025-12-01T14:55:40.204595",
+      "git_info": {
+        "commit_id": "d266926d831d04bd3aa86dbfefe3db8e07df5bc7",
+        "branch": "main",
+        "author": null,
+        "date": null
+      },
+      "models": [
+        "models"
+      ],
+      "configs": [
+        ""
+      ],
+      "status": "inactive"
+    }
+  ]
+}
