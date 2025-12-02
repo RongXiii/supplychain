@@ -1,8 +1,9 @@
 import pandas as pd
 import numpy as np
+import os
 from sklearn.preprocessing import StandardScaler
 import concurrent.futures
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor
 import multiprocessing
 
 class DataProcessor:
@@ -136,7 +137,7 @@ class DataProcessor:
         demand_series = filtered_df[demand_column].tolist()
         return demand_series
     
-    def prepare_demand_data_for_features(self, demand_df, sku_column='item_id', location_column='location_id', demand_column='demand'):
+    def prepare_demand_data_for_features(self, demand_df, sku_column='item_id', location_column='location_id', demand_column='demand', parallel_mode='thread', num_workers=None):
         """
         准备用于特征更新的需求数据
         
@@ -145,6 +146,8 @@ class DataProcessor:
             sku_column: SKU列名
             location_column: 仓库列名
             demand_column: 需求列名
+            parallel_mode: 并行模式，可选值: 'thread'(线程), 'process'(进程), 'distributed'(分布式)
+            num_workers: 并行工作者数量，默认使用CPU核心数
             
         Returns:
             demand_data: 整理后的需求数据，格式为{sku_id: {location_id: demand_series}}
@@ -161,17 +164,108 @@ class DataProcessor:
             )
             return sku_id, location_id, demand_series
         
-        # 并行处理所有组合
-        with ThreadPoolExecutor(max_workers=self.num_workers) as executor:
-            # 提交所有任务
-            futures = [executor.submit(process_combination, sku_id, location_id) for sku_id, location_id in combinations]
-            
-            # 收集结果
-            for future in concurrent.futures.as_completed(futures):
-                sku_id, location_id, demand_series = future.result()
-                if sku_id not in demand_data:
-                    demand_data[sku_id] = {}
-                demand_data[sku_id][location_id] = demand_series
+        # 设置默认工作者数量
+        if num_workers is None:
+            num_workers = os.cpu_count() if parallel_mode == 'process' else min(20, os.cpu_count() * 4)
+        
+        # 根据不同的并行模式选择执行器
+        if parallel_mode == 'thread':
+            # 使用线程池进行并行处理（适合I/O密集型任务）
+            with ThreadPoolExecutor(max_workers=num_workers) as executor:
+                # 提交所有任务
+                futures = [executor.submit(process_combination, sku_id, location_id) for sku_id, location_id in combinations]
+                
+                # 收集结果
+                for future in concurrent.futures.as_completed(futures):
+                    sku_id, location_id, demand_series = future.result()
+                    if sku_id not in demand_data:
+                        demand_data[sku_id] = {}
+                    demand_data[sku_id][location_id] = demand_series
+        
+        elif parallel_mode == 'process':
+            # 使用进程池进行并行处理（适合CPU密集型任务）
+            with ProcessPoolExecutor(max_workers=num_workers) as executor:
+                # 提交所有任务
+                futures = [executor.submit(process_combination, sku_id, location_id) for sku_id, location_id in combinations]
+                
+                # 收集结果
+                for future in concurrent.futures.as_completed(futures):
+                    sku_id, location_id, demand_series = future.result()
+                    if sku_id not in demand_data:
+                        demand_data[sku_id] = {}
+                    demand_data[sku_id][location_id] = demand_series
+        
+        elif parallel_mode == 'distributed':
+            # 分布式处理（使用Dask或Ray）
+            try:
+                # 尝试使用Dask进行分布式处理
+                import dask
+                from dask import delayed
+                
+                print("使用Dask进行分布式处理")
+                
+                # 创建延迟任务列表
+                results = []
+                for sku_id, location_id in combinations:
+                    demand_series = delayed(self.get_demand_series_by_sku_location)(
+                        demand_df, sku_id, location_id, sku_column, location_column, demand_column
+                    )
+                    results.append(delayed((sku_id, location_id, demand_series)))
+                
+                # 执行并行计算
+                processed_results = dask.compute(*results, scheduler='processes', num_workers=num_workers)
+                
+                # 收集结果
+                for sku_id, location_id, demand_series in processed_results:
+                    if sku_id not in demand_data:
+                        demand_data[sku_id] = {}
+                    demand_data[sku_id][location_id] = demand_series
+            except ImportError:
+                try:
+                    # 尝试使用Ray进行分布式处理
+                    import ray
+                    
+                    print("使用Ray进行分布式处理")
+                    
+                    # 初始化Ray
+                    if not ray.is_initialized():
+                        ray.init(num_cpus=num_workers, log_to_driver=False)
+                    
+                    # 定义远程函数
+                    @ray.remote
+                    def remote_process_combination(sku_id, location_id):
+                        return process_combination(sku_id, location_id)
+                    
+                    # 创建远程任务
+                    remote_tasks = [remote_process_combination.remote(sku_id, location_id) for sku_id, location_id in combinations]
+                    
+                    # 获取结果
+                    processed_results = ray.get(remote_tasks)
+                    
+                    # 收集结果
+                    for sku_id, location_id, demand_series in processed_results:
+                        if sku_id not in demand_data:
+                            demand_data[sku_id] = {}
+                        demand_data[sku_id][location_id] = demand_series
+                    
+                    # 关闭Ray
+                    ray.shutdown()
+                except ImportError:
+                    print("未安装Dask或Ray，回退到线程池处理")
+                    # 回退到线程池
+                    with ThreadPoolExecutor(max_workers=num_workers) as executor:
+                        # 提交所有任务
+                        futures = [executor.submit(process_combination, sku_id, location_id) for sku_id, location_id in combinations]
+                        
+                        # 收集结果
+                        for future in concurrent.futures.as_completed(futures):
+                            sku_id, location_id, demand_series = future.result()
+                            if sku_id not in demand_data:
+                                demand_data[sku_id] = {}
+                            demand_data[sku_id][location_id] = demand_series
+        
+        else:
+            raise ValueError(f"不支持的并行模式: {parallel_mode}")
         
         return demand_data
     

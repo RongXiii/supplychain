@@ -7,8 +7,12 @@ from datetime import datetime
 import numpy as np
 import time
 
-# 添加缓存管理器
+# 添加日志管理器和缓存管理器
+from logging_manager import get_logger, log_performance
 from cache_manager import cache_manager
+
+# 初始化日志记录器
+logger = get_logger('api')
 
 # 创建FastAPI应用
 app = FastAPI(
@@ -33,33 +37,52 @@ METRICS_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__fil
 # 辅助函数：加载CSV数据，支持缓存
 def load_csv_data(filename, cache_expire=3600):
     """加载CSV数据文件，支持缓存"""
+    start_time = time.time()
     cache_key = f"csv_data:{filename}"
+    
+    logger.info(f"Loading CSV data: {filename}")
     
     # 尝试从缓存获取
     cached_data = cache_manager.get(cache_key, data_type='dataframe')
     if cached_data is not None:
+        logger.debug(f"Cache hit for CSV data: {filename}")
+        log_performance("load_csv_data", time.time() - start_time, filename=filename, cache_hit=True)
         return cached_data
     
     # 缓存不存在，从文件加载
     file_path = os.path.join(DATA_DIR, filename)
     if not os.path.exists(file_path):
+        logger.error(f"File not found: {filename}")
         raise HTTPException(status_code=404, detail=f"文件不存在: {filename}")
     
     df = pd.read_csv(file_path)
+    logger.debug(f"Loaded CSV data: {filename}, rows: {len(df)}")
     
     # 缓存数据
     cache_manager.set(cache_key, df, expire_seconds=cache_expire)
+    logger.debug(f"Cached CSV data: {filename}")
     
+    log_performance("load_csv_data", time.time() - start_time, filename=filename, cache_hit=False, rows=len(df))
     return df
 
 # 辅助函数：加载指标数据
 def load_metrics_data(product_id):
     """加载指定产品的指标数据"""
+    start_time = time.time()
+    logger.info(f"Loading metrics data for product: {product_id}")
+    
     file_path = os.path.join(METRICS_DIR, f"metrics_{product_id}.json")
     if not os.path.exists(file_path):
+        logger.error(f"Metrics file not found for product: {product_id}")
         raise HTTPException(status_code=404, detail=f"产品 {product_id} 的指标文件不存在")
+    
     with open(file_path, 'r') as f:
-        return json.load(f)
+        metrics = json.load(f)
+    
+    logger.debug(f"Loaded metrics data for product: {product_id}, metrics count: {len(metrics)}")
+    log_performance("load_metrics_data", time.time() - start_time, product_id=product_id, metrics_count=len(metrics))
+    
+    return metrics
 
 # 根路径
 @app.get("/")
@@ -355,6 +378,7 @@ def get_optimal_plan(product_id: str = None):
 # 启动API服务
 if __name__ == "__main__":
     import uvicorn
+    logger.info("Starting API server...")
     # 优化UVicorn配置，提高性能
     uvicorn.run(
         app,

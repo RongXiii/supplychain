@@ -6,6 +6,10 @@ import json
 import os
 from datetime import datetime
 import copy
+import time
+
+# 添加日志管理器
+from logging_manager import get_logger, log_performance
 
 class MLOpsEngine:
     """
@@ -13,6 +17,10 @@ class MLOpsEngine:
     """
     
     def __init__(self, models_dir='models', metrics_dir='metrics', config_dir='config'):
+        # 初始化日志记录器
+        self.logger = get_logger('mlops_engine')
+        self.logger.info("Initializing MLOpsEngine")
+        
         self.models_dir = models_dir
         self.metrics_dir = metrics_dir
         self.config_dir = config_dir
@@ -20,6 +28,7 @@ class MLOpsEngine:
         # 创建必要的目录
         for dir_path in [models_dir, metrics_dir, config_dir]:
             if not os.path.exists(dir_path):
+                self.logger.debug(f"Creating directory: {dir_path}")
                 os.makedirs(dir_path)
         
         # 初始化模型历史记录和指标
@@ -45,11 +54,15 @@ class MLOpsEngine:
         Returns:
             metrics: 包含MAPE、SMAPE、RMSE的字典
         """
+        start_time = time.time()
+        self.logger.info(f"Calculating error metrics for product: {product_id}")
+        
         actual = np.array(actual)
         forecast = np.array(forecast)
         
         # 确保数据不为空且长度一致
         if len(actual) == 0 or len(forecast) == 0 or len(actual) != len(forecast):
+            self.logger.warning(f"Invalid data for error metrics calculation: product={product_id}, actual_len={len(actual)}, forecast_len={len(forecast)}")
             return None
         
         # 移除实际值为0的数据点，避免除零错误
@@ -58,6 +71,7 @@ class MLOpsEngine:
         forecast = forecast[non_zero_mask]
         
         if len(actual) == 0:
+            self.logger.warning(f"No non-zero actual values for error metrics calculation: product={product_id}")
             return None
         
         # 计算MAPE
@@ -96,6 +110,9 @@ class MLOpsEngine:
         # 保存指标
         self._save_metrics(product_id, metrics)
         
+        self.logger.debug(f"Calculated error metrics for product: {product_id}, MAPE: {metrics['mape']}, SMAPE: {metrics['smape']}, RMSE: {metrics['rmse']}")
+        log_performance("calculate_error_metrics", time.time() - start_time, product_id=product_id, data_points=len(actual))
+        
         return metrics
     
     def detect_drift(self, baseline_data, current_data, product_id, alpha=0.1):
@@ -111,15 +128,22 @@ class MLOpsEngine:
         Returns:
             drift_result: 漂移检测结果
         """
+        start_time = time.time()
+        self.logger.info(f"Detecting drift for product: {product_id}")
+        
         # 确保数据不为空且有足够的样本量
         if len(baseline_data) < 10 or len(current_data) < 10:
-            return {
+            self.logger.warning(f"Insufficient sample size for drift detection: product={product_id}, baseline={len(baseline_data)}, current={len(current_data)}")
+            result = {
                 'drift_detected': False,
                 'p_value': 1.0,
                 'test_statistic': 0.0,
                 'reason': '样本量不足',
                 'timestamp': datetime.now().isoformat()
             }
+            self.drift_detection_results[product_id] = result
+            log_performance("detect_drift", time.time() - start_time, product_id=product_id, baseline_size=len(baseline_data), current_size=len(current_data))
+            return result
         
         # 使用KS检验检测分布漂移
         test_statistic, p_value = stats.ks_2samp(baseline_data, current_data)
@@ -143,6 +167,9 @@ class MLOpsEngine:
         
         # 保存漂移检测结果
         self.drift_detection_results[product_id] = drift_result
+        
+        self.logger.info(f"Drift detection result for product {product_id}: drift_detected={drift_detected}, p_value={p_value:.4f}, test_statistic={test_statistic:.4f}")
+        log_performance("detect_drift", time.time() - start_time, product_id=product_id, baseline_size=len(baseline_data), current_size=len(current_data), drift_detected=drift_detected)
         
         return drift_result
     
@@ -233,6 +260,9 @@ class MLOpsEngine:
             model_name: 模型名称
             metrics: 模型指标
         """
+        start_time = time.time()
+        self.logger.info(f"Saving model for product: {product_id}, model_name: {model_name}")
+        
         import joblib
         
         # 将numpy类型转换为Python原生类型的辅助函数
@@ -255,6 +285,7 @@ class MLOpsEngine:
         # 保存模型文件
         model_path = os.path.join(self.models_dir, f'model_{product_id}.pkl')
         joblib.dump(model, model_path)
+        self.logger.debug(f"Saved model file: {model_path}")
         
         # 转换指标中的numpy类型
         converted_metrics = convert_numpy_types(metrics)
@@ -270,6 +301,7 @@ class MLOpsEngine:
         metadata_path = os.path.join(self.models_dir, f'model_{product_id}_metadata.json')
         with open(metadata_path, 'w') as f:
             json.dump(model_metadata, f, indent=2)
+        self.logger.debug(f"Saved model metadata: {metadata_path}")
         
         # 更新模型历史记录
         if product_id not in self.model_history:
@@ -280,6 +312,9 @@ class MLOpsEngine:
             'metadata_path': metadata_path,
             'save_time': datetime.now().isoformat()
         })
+        
+        self.logger.info(f"Model saved successfully for product: {product_id}")
+        log_performance("save_model", time.time() - start_time, product_id=product_id, model_name=model_name)
     
     def load_model(self, product_id, version='latest'):
         """
@@ -293,6 +328,9 @@ class MLOpsEngine:
             model: 模型对象
             metadata: 模型元数据
         """
+        start_time = time.time()
+        self.logger.info(f"Loading model for product: {product_id}, version: {version}")
+        
         import joblib
         
         if version == 'latest':
@@ -306,15 +344,19 @@ class MLOpsEngine:
             model_path = os.path.join(self.models_dir, f'model_{product_id}_{version}.pkl')
         
         if not os.path.exists(model_path) or not os.path.exists(metadata_path):
+            self.logger.error(f"Model files not found for product: {product_id}, version: {version}")
             return None, None
         
         # 加载模型
         model = joblib.load(model_path)
+        self.logger.debug(f"Loaded model file: {model_path}")
         
         # 加载元数据
         with open(metadata_path, 'r') as f:
             metadata = json.load(f)
+        self.logger.debug(f"Loaded model metadata: {metadata_path}")
         
+        log_performance("load_model", time.time() - start_time, product_id=product_id, version=version, model_name=metadata.get('model_name', 'unknown'))
         return model, metadata
     
     def enable_gray_release(self, products, traffic_split=0.5):
