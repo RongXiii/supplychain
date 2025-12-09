@@ -1,0 +1,71 @@
+{
+  "explanation_id": "explain_20251201_132848_4654",
+  "timestamp": "2025-12-01T13:31:25.243205",
+  "model_type": "RandomForestRegressor",
+  "feature_names": [
+    "feature_0",
+    "feature_1",
+    "feature_2",
+    "feature_3",
+    "feature_4"
+  ],
+  "data_shape": {
+    "train": [
+      80,
+      5
+    ],
+    "test": [
+      20,
+      5
+    ]
+  },
+  "feature_importance": [
+    {
+      "feature": "feature_0",
+      "importance": 0.84970061969971,
+      "std": 0.11701020804220436
+    },
+    {
+      "feature": "feature_2",
+      "importance": 0.6404101422893068,
+      "std": 0.09900933382218945
+    },
+    {
+      "feature": "feature_4",
+      "importance": 0.08123035583798355,
+      "std": 0.014215441619994237
+    },
+    {
+      "feature": "feature_3",
+      "importance": 0.017863708764770624,
+      "std": 0.0024986415277262505
+    },
+    {
+      "feature": "feature_1",
+      "importance": 0.010462473820231587,
+      "std": 0.0011242009644546014
+    }
+  ],
+  "lime_explanation": [],
+  "shap_expected_value": [
+    2.5640083091569355
+  ],
+  "top_features": [
+    "feature_0",
+    "feature_2",
+    "feature_4"
+  ],
+  "figures": {
+    "feature_importance": "explain_20251201_132848_4654_feature_importance.png",
+    "shap_summary": "explain_20251201_132848_4654_shap_summary.png",
+    "lime": null,
+    "partial_dependence": "explain_20251201_132848_4654_partial_dependence.png",
+    "shap_force": [
+      "explain_20251201_132848_4654_shap_force_0.png",
+      "explain_20251201_132848_4654_shap_force_1.png",
+      "explain_20251201_132848_4654_shap_force_2.png",
+      "explain_20251201_132848_4654_shap_force_3.png",
+      "explain_20251201_132848_4654_shap_force_4.png"
+    ]
+  }
+}

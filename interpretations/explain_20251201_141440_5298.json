@@ -1,0 +1,63 @@
+{
+  "explanation_id": "explain_20251201_141440_5298",
+  "timestamp": "2025-12-01T14:14:45.387552",
+  "model_type": "XGBRegressor",
+  "feature_names": [
+    "feature_0",
+    "feature_1",
+    "feature_2",
+    "feature_3"
+  ],
+  "data_shape": {
+    "train": [
+      50,
+      4
+    ],
+    "test": [
+      5,
+      4
+    ]
+  },
+  "feature_importance": [
+    {
+      "feature": "feature_1",
+      "importance": 1.1964651993907032,
+      "std": 0.2585492372382327
+    },
+    {
+      "feature": "feature_0",
+      "importance": 0.85811289002904,
+      "std": 0.13530904397511384
+    },
+    {
+      "feature": "feature_3",
+      "importance": 0.018065442105899367,
+      "std": 0.00519060750574721
+    },
+    {
+      "feature": "feature_2",
+      "importance": 0.004228266069054143,
+      "std": 0.0010078705099054583
+    }
+  ],
+  "lime_explanation": [],
+  "shap_expected_value": -7.96426350235939,
+  "top_features": [
+    "feature_1",
+    "feature_0",
+    "feature_3"
+  ],
+  "figures": {
+    "feature_importance": "explain_20251201_141440_5298_feature_importance.png",
+    "shap_summary": "explain_20251201_141440_5298_shap_summary.png",
+    "lime": null,
+    "partial_dependence": "explain_20251201_141440_5298_partial_dependence.png",
+    "shap_force": [
+      "explain_20251201_141440_5298_shap_force_0.png",
+      "explain_20251201_141440_5298_shap_force_1.png",
+      "explain_20251201_141440_5298_shap_force_2.png",
+      "explain_20251201_141440_5298_shap_force_3.png",
+      "explain_20251201_141440_5298_shap_force_4.png"
+    ]
+  }
+}

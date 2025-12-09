@@ -1,0 +1,44 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+.env
+.env.local
+.env.*.local
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Logs
+logs/
+*.log
+
+# Test and coverage
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Models
+models/*.pkl
+models/*.joblib
+models/*_metadata.json
+
+# Data
+data/*.csv
+
+# Temporary files
+*.tmp
+*.temp
+
+# Backup files
+*.bak
+backups/
+
+# OS
+Thumbs.db
