@@ -29,6 +29,9 @@ models/*.pkl
 models/*.joblib
 models/*_metadata.json
 
+# Metrics
+metrics/*.json
+
 # Data
 data/*.csv
 
