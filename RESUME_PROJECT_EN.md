@@ -202,14 +202,6 @@ docker compose up -d
 http://localhost:8000/docs
 ```
 
-## 📅 Project Milestones
-
-1. **Project Initiation**: June 2023 - Requirements analysis and technology selection
-2. **Core Development**: July-September 2023 - Development of prediction models and optimization engine
-3. **System Integration**: October 2023 - Integration and testing of various modules
-4. **Pilot Launch**: November 2023 - Small-scale pilot operation
-5. **Official Launch**: December 2023 - Full launch and stable operation
-
 ## 🔮 Future Planning
 
 ### Short-term Planning (1-3 months)
@@ -227,18 +219,5 @@ http://localhost:8000/docs
 - Develop adaptive learning systems to continuously optimize model performance
 - Build industry knowledge graphs to provide intelligent decision support
 
-## 📞 Contact Information
-
-| Role | Name | Contact |
-|------|------|---------|
-| **Project Manager** | Engineer Zhang | zhang@example.com |
-| **Technical Lead** | Engineer Li | li@example.com |
-| **Algorithm Lead** | Engineer Wang | wang@example.com |
-
----
-
-**Project Website**: [https://supplychain.example.com](https://supplychain.example.com)
-**Documentation**: [https://docs.supplychain.example.com](https://docs.supplychain.example.com)
-**Code Repository**: [https://github.com/example/supplychain](https://github.com/example/supplychain)
 
 *Last updated: December 2023*

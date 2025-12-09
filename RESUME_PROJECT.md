@@ -194,14 +194,6 @@ docker compose up -d
 http://localhost:8000/docs
 ```
 
-## 📅 项目里程碑
-
-1. **项目启动**：2023年6月 - 需求分析和技术选型
-2. **核心开发**：2023年7月-9月 - 预测模型、优化引擎开发
-3. **系统集成**：2023年10月 - 各模块集成和测试
-4. **上线试运行**：2023年11月 - 小范围试运行
-5. **正式上线**：2023年12月 - 全量上线并稳定运行
-
 ## 🔮 未来规划
 
 ### 短期规划（1-3个月）
@@ -219,18 +211,3 @@ http://localhost:8000/docs
 - 开发自适应学习系统，持续优化模型性能
 - 构建行业知识图谱，提供智能决策支持
 
-## 📞 联系方式
-
-| 角色 | 姓名 | 联系方式 |
-|------|------|----------|
-| **项目负责人** | 张工程师 | zhang@example.com |
-| **技术负责人** | 李工程师 | li@example.com |
-| **算法负责人** | 王工程师 | wang@example.com |
-
----
-
-**项目官网**：[https://supplychain.example.com](https://supplychain.example.com)
-**文档地址**：[https://docs.supplychain.example.com](https://docs.supplychain.example.com)
-**代码仓库**：[https://github.com/example/supplychain](https://github.com/example/supplychain)
-
-*最后更新：2023年12月*
