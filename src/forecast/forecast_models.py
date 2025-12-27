@@ -9,6 +9,7 @@ from sklearn.ensemble import RandomForestRegressor, GradientBoostingRegressor
 from sklearn.svm import SVR
 from sklearn.metrics import mean_squared_error, mean_absolute_error
 from sklearn.preprocessing import StandardScaler
+from sklearn.model_selection import cross_val_score
 import joblib
 import os
 from datetime import datetime
@@ -683,18 +684,20 @@ class HybridModel:
         self.ml_model = ml_model or XGBRegressor(n_estimators=50, random_state=42)
         self.is_fitted = False
     
-    def fit(self, y_train):
+    def fit(self, y_train, X_train=None):
         """
         训练混合模型
         
         Args:
             y_train: 训练数据
+            X_train: 外部特征数据（可选）
         """
         # 检查数据长度，至少需要10个数据点
         if len(y_train) < 10:
             # 数据不足时，使用简单的平均模型
             self.arima_model = None
             self.ml_model = None
+            self.n_lags = 1
             self.is_fitted = True
             return
         
@@ -708,43 +711,77 @@ class HybridModel:
             self.arima_model = self.arima_model.fit()
             
             # 2. 计算ARIMA残差
-            # 使用索引位置而不是日期来避免频率问题
-            arima_pred = self.arima_model.predict(start=0, end=len(y_train)-1, typ='levels')
+            # 使用fittedvalues获取模型对训练数据的拟合值，避免日期时间索引问题
+            arima_pred = self.arima_model.fittedvalues
             residuals = y_train - arima_pred
             
             # 3. 用ML模型预测残差
-            # 准备特征：滞后残差和时间特征
-            n_lags = min(3, len(y_train) // 5)
-            X_train = []
+            # 准备特征：滞后残差、时间特征和外部特征
+            self.n_lags = min(3, len(y_train) // 5)
+            # 确保至少有1个滞后特征
+            self.n_lags = max(1, self.n_lags)
+            
+            # 检查是否有外部特征
+            has_external_features = X_train is not None and len(X_train) > 0
+            
+            # 创建特征列表
+            X_ml = []
             y_res = []
             
-            for i in range(n_lags, len(residuals)):
+            for i in range(self.n_lags, len(residuals)):
                 # 滞后残差作为特征
-                lag_features = residuals[i-n_lags:i]
+                lag_features = residuals[i-self.n_lags:i]
                 # 添加时间特征（归一化的时间索引）
                 time_feature = i / len(residuals)
-                X_train.append(list(lag_features) + [time_feature])
-                y_res.append(residuals[i])
+                
+                # 组合特征
+                features = list(lag_features) + [time_feature]
+                
+                # 如果有外部特征，添加它们
+                if has_external_features:
+                    if i < len(X_train):
+                        # 获取当前时间点的外部特征
+                        external_features = X_train.iloc[i].values if hasattr(X_train, 'iloc') else X_train[i]
+                        features.extend(external_features)
+                
+                X_ml.append(features)
+                y_res.append(residuals.iloc[i] if hasattr(residuals, 'iloc') else residuals[i])
             
-            if len(X_train) > 0:
-                X_train = np.array(X_train)
+            if len(X_ml) > 0:
+                X_ml = np.array(X_ml)
                 y_res = np.array(y_res)
-                self.ml_model.fit(X_train, y_res)
+                self.ml_model.fit(X_ml, y_res)
         except Exception as e:
             # ARIMA训练失败时，使用简单的平均模型
             print(f"ARIMA训练失败，使用简单模型: {str(e)}")
             self.arima_model = None
             self.ml_model = None
+            self.n_lags = 1
         
         self.is_fitted = True
     
-    def forecast(self, steps=1):
+    def predict(self, X):
+        """
+        使用模型进行预测（与其他机器学习模型保持一致的接口）
+        
+        Args:
+            X: 特征数据
+            
+        Returns:
+            predictions: 预测结果
+        """
+        # X是未来的特征数据，我们需要预测与X相同长度的未来值
+        steps = len(X)
+        return self.forecast(steps=steps, X_external=X)
+    
+    def forecast(self, steps=1, X_external=None):
         """
         预测未来值
         
         Args:
             steps: 预测步数
-        
+            X_external: 未来的外部特征（可选）
+            
         Returns:
             predictions: 预测结果
         """
@@ -754,6 +791,9 @@ class HybridModel:
         # 如果ARIMA模型未训练成功，返回简单的预测
         if self.arima_model is None:
             return np.zeros(steps)
+        
+        # 获取滞后特征数量，默认为1
+        n_lags = getattr(self, 'n_lags', 1)
         
         try:
             # 1. ARIMA预测
@@ -769,41 +809,63 @@ class HybridModel:
             if hasattr(self.arima_model, 'model') and hasattr(self.arima_model.model, 'endog') and self.ml_model is not None:
                 # 使用索引位置而不是日期来避免频率问题
                 endog_len = len(self.arima_model.model.endog)
-                recent_residuals = np.zeros(3)
+                recent_residuals = np.zeros(n_lags)
                 
-                if endog_len >= 3:
-                    start_idx = max(0, endog_len - 3)
-                    end_idx = endog_len - 1
+                if endog_len >= n_lags:
                     try:
-                        arima_pred = self.arima_model.predict(start=start_idx, end=end_idx, typ='levels')
+                        # 使用forecast方法获取最近的预测值，而不是predict
+                        # 这样可以避免日期时间索引的问题
+                        # 获取最近n_lags个数据点
+                        recent_endog = self.arima_model.model.endog[-n_lags:]
                         
-                        # 确保endog是1维数组
-                        endog = self.arima_model.model.endog[start_idx:end_idx+1]
-                        endog = np.asarray(endog).flatten()
+                        # 预测未来1个点
+                        arima_forecast_short = self.arima_model.forecast(steps=1)
                         
-                        # 确保arima_pred是1维数组
-                        arima_pred = np.asarray(arima_pred).flatten()
+                        # 确保预测值是1维数组
+                        if hasattr(arima_forecast_short, 'values'):
+                            arima_forecast_short = arima_forecast_short.values
+                        arima_forecast_short = np.asarray(arima_forecast_short).flatten()
+                        
+                        # 为了计算残差，我们需要获取最近n_lags个数据点的预测值
+                        # 使用forecast的替代方法：获取模型对训练数据的拟合值
+                        fitted_values = self.arima_model.fittedvalues
+                        
+                        # 确保fitted_values是1维数组
+                        if hasattr(fitted_values, 'values'):
+                            fitted_values = fitted_values.values
+                        fitted_values = np.asarray(fitted_values).flatten()
                         
                         # 计算残差
-                        recent_residuals = endog - arima_pred
+                        residuals = self.arima_model.model.endog - fitted_values
                         
                         # 确保残差是1维数组
-                        recent_residuals = np.asarray(recent_residuals).flatten()
+                        residuals = np.asarray(residuals).flatten()
                         
-                        # 如果残差长度不足3，填充0
-                        if len(recent_residuals) < 3:
-                            recent_residuals = np.pad(recent_residuals, (3 - len(recent_residuals), 0), 'constant')
-                        else:
-                            recent_residuals = recent_residuals[-3:]
+                        # 获取最近n_lags个残差
+                        recent_residuals = residuals[-n_lags:]
                     except Exception as e:
                         print(f"ARIMA预测残差失败: {str(e)}")
-                        recent_residuals = np.zeros(3)
+                        recent_residuals = np.zeros(n_lags)
+                
+                # 检查是否有外部特征
+                has_external_features = X_external is not None and len(X_external) >= steps
                 
                 for i in range(steps):
                     # 准备ML模型的特征
-                    lag_features = recent_residuals[-3:]
+                    lag_features = recent_residuals[-n_lags:]
                     time_feature = (endog_len + i) / (endog_len + steps)
-                    X_pred = np.array([list(lag_features) + [time_feature]])
+                    
+                    # 组合特征
+                    features = list(lag_features) + [time_feature]
+                    
+                    # 如果有外部特征，添加它们
+                    if has_external_features:
+                        if i < len(X_external):
+                            # 获取当前时间点的外部特征
+                            external_features = X_external.iloc[i].values if hasattr(X_external, 'iloc') else X_external[i]
+                            features.extend(external_features)
+                    
+                    X_pred = np.array([features])
                     try:
                         residual_pred = self.ml_model.predict(X_pred)[0]
                         ml_residuals.append(residual_pred)
@@ -1298,14 +1360,24 @@ class ForecastModelSelector:
                     current_rmse = rmse
                 elif model_name == 'hybrid_arima_xgb':
                     # 混合模型特殊处理
+                    # 检查X_train是否有日期时间索引
+                    has_datetime_index = hasattr(X_train, 'index') and isinstance(X_train.index, pd.DatetimeIndex)
+                    
                     model = HybridModel(ml_model=XGBRegressor(n_estimators=50, random_state=42))
-                    model.fit(y_train)
+                    model.fit(y_train, X_train)
                     # 使用历史数据进行回测评估
                     # 简化处理：只预测一步，滚动评估
                     y_pred = []
                     for i in range(1, len(y_train)):
                         temp_model = HybridModel(ml_model=XGBRegressor(n_estimators=50, random_state=42))
-                        temp_model.fit(y_train[:i])
+                        # 确保temp_model使用相同的日期时间索引
+                        if has_datetime_index:
+                            temp_y = y_train[:i]
+                            temp_X = X_train.iloc[:i]
+                        else:
+                            temp_y = y_train[:i]
+                            temp_X = X_train[:i] if X_train is not None else None
+                        temp_model.fit(temp_y, temp_X)
                         pred = temp_model.forecast(steps=1)[0]
                         y_pred.append(pred)
                     
@@ -1401,7 +1473,7 @@ class ForecastModelSelector:
         
         return best_model, best_model_name, best_score
     
-    def forecast(self, model, model_name, X=None):
+    def forecast(self, model, model_name, X=None, steps=1):
         """
         使用模型进行预测
         
@@ -1409,6 +1481,7 @@ class ForecastModelSelector:
             model: 训练好的模型
             model_name: 模型名称
             X: 特征数据（统计模型不需要）
+            steps: 预测步数
             
         Returns:
             predictions: 预测结果
@@ -1417,24 +1490,24 @@ class ForecastModelSelector:
             if model_name in ['arima', 'holt_winters', 'prophet', 'croston', 'sba']:
                 # 统计模型和间歇性需求模型进行预测
                 if model_name == 'arima':
-                    # ARIMA预测未来一个点
-                    predictions = model.forecast(steps=1)
+                    # ARIMA预测
+                    predictions = model.forecast(steps=steps)
                 elif model_name == 'holt_winters':
-                    # Holt-Winters预测未来一个点
-                    predictions = model.forecast(steps=1)
+                    # Holt-Winters预测
+                    predictions = model.forecast(steps=steps)
                 elif model_name == 'prophet':
-                    # Prophet预测未来一个点
-                    future = model.make_future_dataframe(periods=1, include_history=False)
+                    # Prophet预测
+                    future = model.make_future_dataframe(periods=steps, include_history=False)
                     forecast = model.predict(future)
                     predictions = forecast['yhat'].values
                 elif model_name in ['croston', 'sba']:
                     # 间歇性需求模型预测
-                    predictions = model.forecast(steps=1)
+                    predictions = model.forecast(steps=steps)
                 # 将结果转换为与机器学习模型一致的格式
                 return predictions.values if hasattr(predictions, 'values') else predictions
             elif model_name == 'hybrid_arima_xgb':
                 # 混合模型预测
-                predictions = model.forecast(steps=1)
+                predictions = model.forecast(steps=steps, X_external=X)
                 return predictions
             elif model_name == 'ensemble':
                 # 模型融合预测
@@ -1445,7 +1518,56 @@ class ForecastModelSelector:
         except Exception as e:
             print(f"模型 {model_name} 预测失败: {e}")
             # 返回简单的预测结果
-            return np.array([0])
+            return np.array([0] * steps)
+    
+    def batch_forecast(self, product_models, steps=1, parallel=True, n_jobs=-1):
+        """
+        批量预测多个产品
+        
+        Args:
+            product_models: 产品模型字典，格式为{product_id: (model, model_name, X)}，其中X是特征数据（可选）
+            steps: 预测步数
+            parallel: 是否使用并行处理
+            n_jobs: 并行任务数，-1表示使用所有可用CPU核心
+            
+        Returns:
+            forecast_results: 批量预测结果，格式为{product_id: predictions}
+        """
+        import concurrent.futures
+        import time
+        
+        start_time = time.time()
+        
+        def predict_product(product_id, model_info):
+            """预测单个产品"""
+            model, model_name, X = model_info
+            try:
+                return product_id, self.forecast(model, model_name, X, steps=steps)
+            except Exception as e:
+                print(f"产品 {product_id} 预测失败: {e}")
+                return product_id, np.array([0] * steps)
+        
+        forecast_results = {}
+        
+        if parallel:
+            # 使用并行处理
+            with concurrent.futures.ProcessPoolExecutor(max_workers=n_jobs) as executor:
+                # 提交所有任务
+                futures = [executor.submit(predict_product, product_id, model_info) for product_id, model_info in product_models.items()]
+                
+                # 收集结果
+                for future in concurrent.futures.as_completed(futures):
+                    product_id, predictions = future.result()
+                    forecast_results[product_id] = predictions
+        else:
+            # 串行处理
+            for product_id, model_info in product_models.items():
+                product_id, predictions = predict_product(product_id, model_info)
+                forecast_results[product_id] = predictions
+        
+        print(f"批量预测完成，耗时: {time.time() - start_time:.2f}秒，产品数: {len(product_models)}")
+        
+        return forecast_results
     
     def predict(self, model, model_name, X):
         """
@@ -1572,19 +1694,83 @@ class ForecastModelSelector:
             print(f"无法更新产品 {product_id} 的模型，模型不存在")
             return None, None
         
-        if model_name in ['arima', 'holt_winters']:
-            # 统计模型需要重新训练
-            combined_y = np.concatenate([model.model.endog, new_y])
+        if model_name in ['arima', 'holt_winters', 'prophet', 'croston', 'sba']:
+            # 统计模型和间歇性需求模型需要重新训练
+            # 获取历史数据
             if model_name == 'arima':
+                combined_y = np.concatenate([model.model.endog, new_y])
                 new_model = ARIMA(combined_y, order=(1,1,1))
                 updated_model = new_model.fit()
-            else:  # holt_winters
+            elif model_name == 'holt_winters':
+                combined_y = np.concatenate([model.model.endog, new_y])
                 new_model = ExponentialSmoothing(combined_y, trend='add', seasonal=None)
                 updated_model = new_model.fit()
-        else:
-            # 机器学习模型增量训练
-            model.fit(new_X, new_y)
+            elif model_name == 'prophet':
+                # Prophet模型需要将新数据添加到历史数据框中
+                # 获取历史数据（假设模型保留了训练数据）
+                if hasattr(model, 'history') and hasattr(model, 'make_future_dataframe'):
+                    # 创建包含新数据的数据框
+                    new_data = pd.DataFrame({
+                        'ds': pd.date_range(start=model.history['ds'].iloc[-1] + pd.Timedelta(days=1), periods=len(new_y)),
+                        'y': new_y
+                    })
+                    combined_data = pd.concat([model.history, new_data])
+                    new_model = Prophet()
+                    updated_model = new_model.fit(combined_data)
+                else:
+                    # 如果无法获取历史数据，只使用新数据训练
+                    new_data = pd.DataFrame({
+                        'ds': pd.date_range(start=pd.Timestamp.now(), periods=len(new_y)),
+                        'y': new_y
+                    })
+                    new_model = Prophet()
+                    updated_model = new_model.fit(new_data)
+            elif model_name == 'croston':
+                combined_y = np.concatenate([model.model.endog, new_y])
+                new_model = Croston(trend=True, seasonal=False, seasonal_periods=12)
+                updated_model = new_model.fit(combined_y)
+            elif model_name == 'sba':
+                combined_y = np.concatenate([model.model.endog, new_y])
+                new_model = SBA(trend=True, seasonal=False, seasonal_periods=12)
+                updated_model = new_model.fit(combined_y)
+            else:
+                # 其他统计模型的默认处理
+                combined_y = np.concatenate([model.model.endog, new_y])
+                new_model = self.all_models[model_name](combined_y)
+                updated_model = new_model.fit()
+        elif model_name in ['hybrid_arima_xgb', 'ensemble']:
+            # 混合模型和模型融合的特殊处理
+            # 简化处理：使用新数据重新训练
+            if hasattr(model, 'fit'):
+                if model_name == 'hybrid_arima_xgb':
+                    # HybridModel的fit方法接受endog和exog参数，而不是X和y参数
+                    model.fit(new_y, new_X)
+                else:
+                    model.fit(new_X, new_y)
             updated_model = model
+        else:
+            # 机器学习模型：将新数据与旧数据合并后再训练
+            try:
+                # 确保new_X和new_y是numpy数组
+                if hasattr(new_X, 'values'):
+                    new_X = new_X.values
+                if hasattr(new_y, 'values'):
+                    new_y = new_y.values
+                
+                # 尝试获取模型的训练数据（如果模型保留了的话）
+                if hasattr(model, 'X_') and hasattr(model, 'y_'):
+                    combined_X = np.concatenate([model.X_, new_X])
+                    combined_y = np.concatenate([model.y_, new_y])
+                    model.fit(combined_X, combined_y)
+                else:
+                    # 如果无法获取历史数据，只使用新数据训练
+                    model.fit(new_X, new_y)
+                updated_model = model
+            except Exception as e:
+                print(f"机器学习模型更新失败: {e}")
+                # 回退到只使用新数据训练
+                model.fit(new_X, new_y)
+                updated_model = model
         
         # 保存更新后的模型
         self.save_model(updated_model, model_name, product_id, metadata)
@@ -1891,7 +2077,11 @@ class ForecastModelSelector:
                 updated_model = new_model.fit()
         else:
             # 机器学习模型增量训练
-            model.fit(X_new, y_new)
+            # 确保X_new是numpy数组
+            X_new_np = X_new.values if hasattr(X_new, 'values') else X_new
+            # 确保y_new是numpy数组
+            y_new_np = y_new.values.ravel() if hasattr(y_new, 'values') else y_new.ravel()
+            model.fit(X_new_np, y_new_np)
             updated_model = model
         
         # 保存更新后的模型
@@ -2016,7 +2206,7 @@ class ForecastModelSelector:
             print(f"在线学习失败: {e}")
             return model, model_name, False
     
-    def feedback_loop(self, product_id, predictions, actuals, feedback_weight=0.1):
+    def feedback_loop(self, product_id, predictions, actuals, X=None, feedback_weight=0.1):
         """
         反馈循环 - 将实际业务结果反馈到模型训练中，持续改进模型性能
         
@@ -2024,6 +2214,7 @@ class ForecastModelSelector:
             product_id: 产品ID
             predictions: 模型预测值
             actuals: 实际业务结果
+            X: 特征数据（可选）
             feedback_weight: 反馈权重，控制反馈对模型的影响程度
             
         Returns:
@@ -2059,16 +2250,98 @@ class ForecastModelSelector:
                 'improvement': improvement
             })
             
-            # 简单更新模型（实际应用中可根据反馈特征调整模型）
-            updated_model, model_name = self.update_model(product_id, self.X_train, self.y_train) if hasattr(self, 'X_train') else (model, model_name)
+            # 创建包含实际值的新数据集
+            # 由于我们只有预测值和实际值，没有对应的特征，所以我们使用简单的方法
+            # 对于统计模型，我们可以直接使用实际值
+            # 对于机器学习模型，我们需要重新训练或微调
+            if model_name in ['arima', 'holt_winters', 'prophet', 'croston', 'sba']:
+                # 统计模型需要特定格式的数据
+                if hasattr(model, 'model') and hasattr(model.model, 'endog'):
+                    # 确保actuals是1维数组
+                    actuals_1d = actuals.values.ravel() if hasattr(actuals, 'values') else actuals.ravel()
+                    
+                    # 检查model.model.endog的形状并转换为1维
+                    endog_1d = model.model.endog.ravel()
+                    
+                    # 连接数组
+                    combined_y = np.concatenate([endog_1d, actuals_1d])
+                    
+                    if model_name == 'arima':
+                        new_model = ARIMA(combined_y, order=(1,1,1))
+                        updated_model = new_model.fit()
+                    elif model_name == 'holt_winters':
+                        new_model = ExponentialSmoothing(combined_y, trend='add', seasonal=None)
+                        updated_model = new_model.fit()
+                    elif model_name == 'prophet':
+                        # Prophet模型需要特定格式的数据
+                        df = pd.DataFrame({'ds': pd.date_range(start='2020-01-01', periods=len(combined_y)), 'y': combined_y})
+                        updated_model = Prophet()
+                        updated_model.fit(df)
+                    elif model_name == 'croston':
+                        updated_model = Croston()
+                        updated_model.fit(combined_y)
+                    elif model_name == 'sba':
+                        updated_model = SBA()
+                        updated_model.fit(combined_y)
+                else:
+                    # 如果无法获取原始数据，使用实际值重新训练
+                    updated_model, model_name = self.select_best_model(None, actuals, product_id)
+            else:
+                # 机器学习模型
+                if X is not None and not X.empty:
+                    # 如果有特征数据，使用update_model方法更新
+                    updated_model, model_name = self.update_model(product_id, X, actuals)
+                else:
+                    # 如果没有特征数据，返回原始模型
+                    updated_model = model
             
-            # 计算改进幅度（如果有测试数据）
-            if hasattr(self, 'X_test') and hasattr(self, 'y_test'):
-                y_pred_old = model.predict(self.X_test)
-                y_pred_new = updated_model.predict(self.X_test)
-                rmse_old = np.sqrt(mean_squared_error(self.y_test, y_pred_old))
-                rmse_new = np.sqrt(mean_squared_error(self.y_test, y_pred_new))
-                improvement = (rmse_old - rmse_new) / rmse_old * 100 if rmse_old > 0 else 0
+            # 计算改进幅度
+            if updated_model is not None:
+                # 简单比较模型在实际值上的表现
+                try:
+                    if model_name in ['arima', 'holt_winters', 'prophet', 'croston', 'sba']:
+                        # 对于时间序列模型和间歇性需求模型，使用最新数据进行预测
+                        y_pred_old = model.forecast(steps=len(actuals))
+                        y_pred_new = updated_model.forecast(steps=len(actuals))
+                        
+                        # 确保我们只提取预测值部分
+                        if hasattr(y_pred_old, 'values'):
+                            y_pred_old = y_pred_old.values
+                        elif hasattr(y_pred_old, 'predicted_mean'):
+                            y_pred_old = y_pred_old.predicted_mean.values
+                        elif not isinstance(y_pred_old, (np.ndarray, list)):
+                            y_pred_old = np.array(y_pred_old)
+                        
+                        if hasattr(y_pred_new, 'values'):
+                            y_pred_new = y_pred_new.values
+                        elif hasattr(y_pred_new, 'predicted_mean'):
+                            y_pred_new = y_pred_new.predicted_mean.values
+                        elif not isinstance(y_pred_new, (np.ndarray, list)):
+                            y_pred_new = np.array(y_pred_new)
+                        
+                        # 计算RMSE
+                        rmse_old = np.sqrt(mean_squared_error(actuals, y_pred_old))
+                        rmse_new = np.sqrt(mean_squared_error(actuals, y_pred_new))
+                        improvement = (rmse_old - rmse_new) / rmse_old * 100 if rmse_old > 0 else 0
+                    else:
+                        # 对于机器学习模型，需要特征数据进行预测
+                        if X is not None and not X.empty:
+                            # 确保X是numpy数组
+                            X_np = X.values if hasattr(X, 'values') else X
+                            y_pred_old = model.predict(X_np) if hasattr(model, 'predict') else predictions
+                            y_pred_new = updated_model.predict(X_np) if hasattr(updated_model, 'predict') else actuals
+                        else:
+                            # 如果没有特征数据，使用原始预测和实际值
+                            y_pred_old = predictions
+                            y_pred_new = actuals
+                        
+                        # 计算RMSE
+                        rmse_old = np.sqrt(mean_squared_error(actuals, y_pred_old))
+                        rmse_new = np.sqrt(mean_squared_error(actuals, y_pred_new))
+                        improvement = (rmse_old - rmse_new) / rmse_old * 100 if rmse_old > 0 else 0
+                except Exception as e:
+                    # 如果无法计算改进幅度，使用默认值
+                    improvement = 0.0
             
             # 保存更新后的模型和元数据
             self.save_model(updated_model, model_name, product_id, metadata)

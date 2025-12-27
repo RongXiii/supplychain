@@ -1,5 +1,7 @@
-from fastapi import FastAPI, HTTPException, Depends
+from fastapi import FastAPI, HTTPException, Depends, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse, HTMLResponse
+from fastapi.staticfiles import StaticFiles
 import pandas as pd
 import json
 import os
@@ -8,12 +10,12 @@ import numpy as np
 import time
 
 # 添加日志管理器和缓存管理器
-from logging_manager import get_logger, log_performance
-from cache_manager import cache_manager
-from data_source import DataSourceFactory
+from src.system.logging_manager import get_logger, log_performance
+from src.system.cache_manager import cache_manager
+from src.data.data_source import DataSourceFactory
 
 # 导入补货系统核心类
-from system.main import ReplenishmentSystem
+from src.system.main import ReplenishmentSystem
 
 # 初始化日志记录器
 logger = get_logger('api')
@@ -27,6 +29,15 @@ app = FastAPI(
     description="为PowerBI等可视化工具提供数据接口",
     version="2.0.0"
 )
+
+# 配置静态文件目录
+# 首先创建静态文件目录
+STATIC_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
+if not os.path.exists(STATIC_DIR):
+    os.makedirs(STATIC_DIR)
+
+# 挂载静态文件目录
+app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
 # 配置CORS，允许PowerBI访问
 app.add_middleware(
@@ -51,6 +62,7 @@ def load_data(table_name, cache_expire=3600):
     cache_key = f"data:{table_name}"
     
     logger.info(f"Loading data: {table_name}")
+    logger.info(f"Current DATA_SOURCE_TYPE: {os.getenv('DATA_SOURCE_TYPE', 'not set')}")
     
     # 尝试从缓存获取
     cached_data = cache_manager.get(cache_key, data_type='dataframe')
@@ -60,47 +72,45 @@ def load_data(table_name, cache_expire=3600):
         return cached_data
     
     try:
-        # 尝试从配置的数据源获取数据
-        # 首先检查环境变量中是否配置了数据源类型
-        data_source_type = os.getenv("DATA_SOURCE_TYPE", "csv")
+        # 直接使用模拟数据源，解决CSV文件缺失问题
+        data_source_type = 'simulated'
         
-        # 配置数据源参数
-        if data_source_type == "csv":
-            data_source_config = {
-                'data_dir': DATA_DIR
-            }
-        elif data_source_type == "database":
-            data_source_config = {
-                'connection_string': os.getenv("DATABASE_CONNECTION_STRING", "")
-            }
-        elif data_source_type == "api":
-            data_source_config = {
-                'base_url': os.getenv("API_BASE_URL", ""),
-                'headers': {"Authorization": f"Bearer {os.getenv('API_TOKEN', '')}"}
-            }
-        else:
-            data_source_config = {}
+        logger.info(f"Selected data source type: {data_source_type}")
+        
+        # 配置数据源参数（模拟数据源不需要额外配置）
+        data_source_config = {}
+        
+        logger.info(f"Data source config: {data_source_config}")
         
         # 创建数据源实例
         data_source = data_source_factory.create_data_source(data_source_type, data_source_config)
+        logger.info(f"Created data source instance: {type(data_source).__name__}")
         
         # 根据表名获取对应的数据
         if table_name == "items.csv":
+            logger.info(f"Calling get_items() method")
             df = data_source.get_items()
         elif table_name == "locations.csv":
+            logger.info(f"Calling get_locations() method")
             df = data_source.get_locations()
         elif table_name == "suppliers.csv":
+            logger.info(f"Calling get_suppliers() method")
             df = data_source.get_suppliers()
         elif table_name == "inventory_daily.csv":
+            logger.info(f"Calling get_inventory_daily() method")
             df = data_source.get_inventory_daily()
         elif table_name == "purchase_orders.csv":
+            logger.info(f"Calling get_purchase_orders() method")
             df = data_source.get_purchase_orders()
         elif table_name == "forecast_output.csv":
+            logger.info(f"Calling get_forecast_output() method")
             df = data_source.get_forecast_output()
         elif table_name == "optimal_plan.csv":
+            logger.info(f"Calling get_optimal_plan() method")
             df = data_source.get_optimal_plan()
         else:
             # 对于其他表，尝试从CSV文件加载
+            logger.info(f"Table {table_name} not found in datasource methods, trying CSV fallback")
             file_path = os.path.join(DATA_DIR, table_name)
             if not os.path.exists(file_path):
                 logger.error(f"File not found: {table_name}")
@@ -108,12 +118,43 @@ def load_data(table_name, cache_expire=3600):
             df = pd.read_csv(file_path)
     except Exception as e:
         # 如果从数据源获取失败，尝试从CSV文件加载（降级策略）
-        logger.warning(f"Failed to load data from {data_source_type} source, falling back to CSV: {e}")
-        file_path = os.path.join(DATA_DIR, table_name)
-        if not os.path.exists(file_path):
-            logger.error(f"File not found: {table_name}")
-            raise HTTPException(status_code=404, detail=f"文件不存在: {table_name}")
-        df = pd.read_csv(file_path)
+        import traceback
+        logger.error(f"Failed to load data from {data_source_type} source: {e}")
+        logger.error(f"Exception traceback: {traceback.format_exc()}")
+        
+        try:
+            logger.warning(f"Falling back to CSV: {e}")
+            file_path = os.path.join(DATA_DIR, table_name)
+            if not os.path.exists(file_path):
+                logger.error(f"File not found: {table_name}")
+                raise Exception(f"CSV file not found: {table_name}")
+            df = pd.read_csv(file_path)
+        except Exception as csv_e:
+            # 如果CSV加载也失败，使用模拟数据源作为最终 fallback
+            logger.error(f"Failed to load from CSV: {csv_e}")
+            logger.warning(f"Falling back to simulated data source")
+            
+            # 使用模拟数据源
+            data_source = data_source_factory.create_data_source('simulated', {})
+            
+            # 根据表名获取对应的数据
+            if table_name == "items.csv":
+                df = data_source.get_items()
+            elif table_name == "locations.csv":
+                df = data_source.get_locations()
+            elif table_name == "suppliers.csv":
+                df = data_source.get_suppliers()
+            elif table_name == "inventory_daily.csv":
+                df = data_source.get_inventory_daily()
+            elif table_name == "purchase_orders.csv":
+                df = data_source.get_purchase_orders()
+            elif table_name == "forecast_output.csv":
+                df = data_source.get_forecast_output()
+            elif table_name == "optimal_plan.csv":
+                df = data_source.get_optimal_plan()
+            else:
+                logger.error(f"Unsupported table for simulated data: {table_name}")
+                raise HTTPException(status_code=404, detail=f"表不存在且无法从模拟数据源获取: {table_name}")
     
     logger.debug(f"Loaded data: {table_name}, rows: {len(df)}")
     
@@ -143,6 +184,44 @@ def load_metrics_data(product_id):
     
     return metrics
 
+# 缓存装饰器
+from functools import wraps
+
+def cache_api(cache_key_pattern, expire_seconds=3600, data_type='json'):
+    """
+    API端点缓存装饰器
+    
+    参数:
+    - cache_key_pattern: 缓存键模式，支持{param}占位符
+    - expire_seconds: 过期时间（秒）
+    - data_type: 数据类型
+    
+    返回:
+    - 装饰后的函数
+    """
+    def decorator(func):
+        @wraps(func)
+        def wrapper(*args, **kwargs):
+            # 生成缓存键
+            cache_key = cache_key_pattern.format(**kwargs)
+            
+            # 尝试从缓存获取
+            cached_result = cache_manager.get(cache_key, data_type=data_type)
+            if cached_result is not None:
+                logger.debug(f"Cache hit for API: {cache_key}")
+                return cached_result
+            
+            # 调用原始函数
+            result = func(*args, **kwargs)
+            
+            # 缓存结果
+            cache_manager.set(cache_key, result, expire_seconds=expire_seconds)
+            logger.debug(f"Cached API result: {cache_key}")
+            
+            return result
+        return wrapper
+    return decorator
+
 # 根路径
 @app.get("/")
 def root():
@@ -159,7 +238,7 @@ def root():
         ]
     }
 
-# 获取所有产品列表
+
 @app.get("/api/items")
 def get_items():
     """获取所有产品信息"""
@@ -291,7 +370,7 @@ def get_forecast_data(product_id: str = None):
     df = load_data("forecast_output.csv")
     
     # 转换日期格式
-    df['date'] = pd.to_datetime(df['date'])
+    df['date'] = pd.to_datetime(df['horizon_date'])
     
     # 如果指定了产品ID，过滤数据
     if product_id:
@@ -354,6 +433,10 @@ def get_model_performance(product_id: str = None):
     cache_manager.set(cache_key, result, expire_seconds=1800)  # 30分钟过期
     
     return result
+
+
+
+
 
 # 获取模型平均性能指标
 @app.get("/api/models/performance/average")
@@ -422,6 +505,7 @@ def get_optimal_plan(product_id: str = None):
 
 # 新增实时预测端点
 @app.post("/api/forecast/real-time")
+@cache_api("api:forecast:real-time:{product_id}:{forecast_days}:{model_tag}", expire_seconds=300, data_type='json')
 def real_time_forecast(product_id: str, forecast_days: int = 7, model_tag: str = None):
     """
     实时预测产品需求
@@ -468,6 +552,38 @@ def real_time_forecast(product_id: str, forecast_days: int = 7, model_tag: str =
     except Exception as e:
         logger.error(f"实时预测失败: {str(e)}")
         raise HTTPException(status_code=500, detail=f"实时预测失败: {str(e)}")
+
+@app.post("/api/forecast/batch")
+async def batch_forecast(request: Request):
+    """
+    批量预测多个产品的需求
+    
+    参数:
+    - products_data: 产品数据字典
+    - steps: 预测步数（默认1）
+    - parallel: 是否并行处理（默认True）
+    - n_jobs: 并行任务数（默认-1，使用所有CPU）
+    
+    返回:
+    - 批量预测结果
+    """
+    logger.info(f"批量预测请求")
+    
+    try:
+        data = await request.json()
+        products_data = data.get('products_data')
+        steps = data.get('steps', 1)
+        parallel = data.get('parallel', True)
+        n_jobs = data.get('n_jobs', -1)
+        
+        if not products_data or not isinstance(products_data, dict):
+            raise HTTPException(status_code=400, detail="缺少必要参数: products_data (必须是字典类型)")
+        
+        result = replenishment_system.batch_run_forecast(products_data, steps=steps, parallel=parallel, n_jobs=n_jobs)
+        return result
+    except Exception as e:
+        logger.error(f"批量预测失败: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"批量预测失败: {str(e)}")
 
 # 新增实时优化端点
 @app.post("/api/optimize/real-time")

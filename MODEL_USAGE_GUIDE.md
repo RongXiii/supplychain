@@ -83,62 +83,72 @@
 
 ## 3. 安装指南
 
-## 2. 安装指南
+### 3.1 环境要求
+- **Python版本**：Python 3.7+（推荐使用3.9或3.10）
+- **硬件资源**：
+  - 内存：至少4GB RAM（推荐8GB+用于大规模数据处理）
+  - 磁盘空间：至少10GB可用空间
+  - CPU：4核心或更高（支持并行计算）
+  - GPU：可选（支持CUDA的NVIDIA GPU，用于加速深度学习模型）
 
-### 2.1 环境要求
-- Python 3.7+
-- 足够的内存和磁盘空间（建议至少8GB RAM）
+### 3.2 安装步骤
 
-### 2.2 安装步骤
-
-1. **克隆或下载项目**
+1. **获取项目代码**
    ```bash
    # 克隆项目（如果使用Git）
    git clone <项目地址>
+   cd <项目目录>
    
    # 或直接下载项目压缩包并解压
    ```
 
 2. **创建并激活虚拟环境**
    ```bash
-   # Windows
+   # Windows系统
    python -m venv .venv
    .venv\Scripts\activate
    
-   # Linux/Mac
+   # Linux/Mac系统
    python -m venv .venv
    source .venv/bin/activate
    ```
 
 3. **安装依赖包**
    ```bash
+   # 升级pip（可选但推荐）
+   pip install --upgrade pip
+   
+   # 安装核心依赖
    pip install -r requirements.txt
+   
+   # 安装可选依赖（用于GPU加速、高级可视化等）
+   pip install -r requirements-optional.txt
    ```
 
 ## 4. 快速开始
 
-### 4.1 运行主程序
+### 4.1 运行主程序演示
 
-主程序演示了系统的完整功能流程：
+主程序演示了系统的完整功能流程，适合初次使用时了解系统运行方式：
 
 ```bash
 python src/system/main.py
 ```
 
 运行后，系统将执行以下步骤：
-1. 生成或加载模拟数据
-2. 对每个产品进行智能模型选择
-3. 训练最佳预测模型
-4. 进行需求预测
-5. 运行MILP优化计算最优订货策略
-6. 生成采购订单
-7. 演示自动补单流程
+1. 生成或加载模拟数据（包含历史需求、产品信息和库存数据）
+2. 对每个产品进行智能模型选择（根据数据特征自动选择最佳预测模型）
+3. 训练所选的最佳预测模型
+4. 进行未来一段时间的需求预测
+5. 运行MILP优化算法计算最优订货策略
+6. 生成采购订单和补货建议
+7. 演示自动补单流程和异常处理
 
-### 4.2 智能模型选择与预测流程图
+### 4.2 智能模型选择与预测流程
 
 ```
 ┌───────────────────────────────────────────────────────────────────┐
-│                          模型选择流程                               │
+│                          模型选择与预测流程                         │
 │                                                                   │
 │  ┌───────────┐     ┌─────────────┐     ┌──────────────┐           │
 │  │  加载数据  │────▶│  特征工程    │────▶│  模型筛选     │           │
@@ -160,7 +170,7 @@ python src/system/main.py
 └───────────────────────────────────────────────────────────────────┘
 ```
 
-### 3.2 启动API服务
+### 4.3 启动API服务
 
 API服务提供标准REST接口，支持与其他系统集成：
 
@@ -169,17 +179,33 @@ python start_api.py
 ```
 
 服务启动后，可访问以下地址：
-- API文档：`http://localhost:8000/docs`
-- 数据接口：`http://localhost:8000/api/`
+- **API文档**：`http://localhost:8000/docs`（Swagger UI）
+- **健康检查**：`http://localhost:8000/health`
+- **数据接口**：`http://localhost:8000/api/`
 
-### 3.3 运行DEMO
+### 4.4 运行演示程序
+
 ```bash
 python demo.py
 ```
 
-### 3.4 运行测试
+演示程序提供了以下功能的交互式展示：
+- 数据加载与可视化
+- 模型选择与预测
+- 补货策略演示
+- MILP优化结果展示
+
+### 4.5 运行系统测试
+
 ```bash
+# 运行所有测试
 python -m pytest tests/ -v
+
+# 运行特定模块的测试
+python -m pytest tests/test_forecast.py -v
+
+# 运行特定测试函数
+python -m pytest tests/test_replenishment.py::test_milp_optimization -v
 ```
 
 ## 4. 主要功能使用
@@ -405,18 +431,34 @@ curl http://localhost:8000/api/models/performance
 
 ### 7.1 GPU加速
 
-系统支持XGBoost等模型的GPU加速，启用方法：
+系统支持XGBoost等模型的GPU加速，可显著提升模型训练和预测速度：
 
 ```python
 # 初始化模型选择器时启用GPU
 model_selector = ForecastModelSelector(use_gpu=True)
+
+# 单独初始化XGBoost模型时启用GPU
+xgb_model = XGBoostForecaster(use_gpu=True)
 ```
 
-**注意**：需要安装GPU版本的XGBoost和相应的GPU驱动。
+**配置要点**：
+- 安装GPU版本的XGBoost：`pip install xgboost-gpu`
+- 确保已安装兼容的CUDA驱动和CUDA Toolkit
+- GPU加速主要对XGBoost模型有效，其他模型可能不支持
 
 ### 7.2 并行计算
 
-系统支持多进程并行计算，可在`data_processor.py`和其他模块中配置并行度。
+系统支持多进程并行计算，可在多个模块中配置并行度：
+
+```python
+# 在数据处理器中启用并行计算
+processor = DataProcessor(parallelism=4)  # 使用4个进程
+
+# 在模型选择器中启用并行计算
+model_selector = ForecastModelSelector(n_jobs=8)  # 使用8个进程进行模型评估
+```
+
+**配置文件**：并行计算的默认参数可在`src/config/settings.py`中配置。
 
 ### 7.3 缓存机制
 
@@ -425,20 +467,44 @@ model_selector = ForecastModelSelector(use_gpu=True)
 ```python
 from src.system.cache_manager import CacheManager
 
-# 初始化缓存管理器（distributed=True启用Redis）
-cache_manager = CacheManager(distributed=False)  # 仅使用内存缓存
+# 使用内存缓存（默认配置）
+cache_manager = CacheManager(distributed=False)
+
+# 使用Redis分布式缓存
+cache_manager = CacheManager(distributed=True, redis_host="localhost", redis_port=6379)
+
+# 缓存数据
+cache_manager.set("product_data", product_data, expire_seconds=3600)
+
+# 获取缓存数据
+cached_data = cache_manager.get("product_data")
 ```
+
+**注意**：使用Redis缓存时，需要确保Redis服务已启动并可访问。
 
 ## 8. 监控与维护
 
 ### 8.1 日志查看
 
-系统日志保存在`logs/`目录下：
-- `general.log`：通用日志
-- `error.log`：错误日志
-- `performance.log`：性能日志
+系统日志保存在`logs/`目录下，采用分级日志记录机制：
 
-### 8.2 模型监控与持续优化流程图
+| 日志文件 | 级别 | 内容描述 |
+|---------|------|----------|
+| `general.log` | INFO | 系统运行的通用信息、流程记录 |
+| `error.log` | ERROR | 错误信息、异常堆栈跟踪 |
+| `performance.log` | DEBUG | 性能指标、执行时间记录 |
+| `mlops.log` | INFO | 模型监控、数据漂移检测记录 |
+
+**查看日志**：
+```bash
+# 实时查看通用日志
+tail -f logs/general.log
+
+# 查看错误日志
+tail -n 100 logs/error.log
+```
+
+### 8.2 模型监控与优化流程
 
 ```
 ┌───────────────────────────────────────────────────────────────────┐
@@ -464,7 +530,7 @@ cache_manager = CacheManager(distributed=False)  # 仅使用内存缓存
 └───────────────────────────────────────────────────────────────────┘
 ```
 
-### 8.2 模型监控
+### 8.3 模型监控与管理
 
 使用MLOps引擎监控模型性能和数据漂移：
 
@@ -474,12 +540,22 @@ from src.mlops.mlops_engine import MLOpsEngine
 # 初始化MLOps引擎
 mlops_engine = MLOpsEngine()
 
-# 监控模型性能
-model_performance = mlops_engine.monitor_model_performance()
+# 监控所有模型的性能
+performance_metrics = mlops_engine.monitor_model_performance()
+for model_id, metrics in performance_metrics.items():
+    print(f"模型 {model_id} 的准确率: {metrics['accuracy']:.2f}")
 
 # 检测数据漂移
 drift_results = mlops_engine.detect_data_drift()
+if drift_results["drift_detected"]:
+    print("检测到数据漂移，建议重新训练模型")
+    mlops_engine.auto_retrain_models(drift_results["affected_models"])
 ```
+
+**模型监控指标**：
+- 预测准确率、MAE、RMSE等性能指标
+- 数据分布漂移检测
+- 模型更新频率和效果对比
 
 ### 8.3 定期维护任务
 
@@ -493,127 +569,321 @@ drift_results = mlops_engine.detect_data_drift()
 
 **问题**：安装依赖时出现错误
 **解决方案**：
-- 确保使用Python 3.7+版本
-- 尝试升级pip：`pip install --upgrade pip`
-- 逐个安装依赖，定位具体问题：`pip install <package_name>`
+1. 确保使用Python 3.7+版本：`python --version`
+2. 升级pip：`pip install --upgrade pip`
+3. 检查网络连接，确保能访问PyPI
+4. 逐个安装依赖包，定位具体问题：`pip install <package_name>`
+5. 对于复杂依赖冲突，尝试使用conda创建环境
+
+**问题**：安装XGBoost GPU版本失败
+**解决方案**：
+- 确保已安装兼容的CUDA Toolkit（建议11.0+）
+- 使用conda安装：`conda install -c conda-forge xgboost-gpu`
+- 或从源码编译安装：`pip install --no-binary xgboost xgboost-gpu`
 
 ### 9.2 运行问题
 
 **问题**：无法连接Redis
 **解决方案**：
-- 确保Redis服务器已启动
-- 检查Redis连接参数（主机、端口、密码）
-- 在初始化CacheManager时设置`distributed=False`，使用内存缓存
+1. 确保Redis服务已启动：`redis-server --daemonize yes`
+2. 检查Redis连接参数：
+   ```python
+   cache_manager = CacheManager(
+       distributed=True,
+       redis_host="localhost",  # 检查主机名
+       redis_port=6379,          # 检查端口
+       redis_password=None       # 检查密码（如配置）
+   )
+   ```
+3. 临时使用内存缓存：`cache_manager = CacheManager(distributed=False)`
 
 **问题**：GPU加速无法使用
 **解决方案**：
-- 检查是否安装了GPU版本的XGBoost：`pip install xgboost-gpu`
-- 确保GPU驱动已正确安装
-- 检查CUDA版本是否与XGBoost兼容
-- 尝试在初始化模型选择器时设置`use_gpu=False`，使用CPU版本
+1. 验证GPU驱动和CUDA安装：`nvidia-smi`
+2. 安装GPU版本XGBoost：`pip install xgboost-gpu`
+3. 检查CUDA版本与XGBoost兼容性
+4. 临时禁用GPU：`model_selector = ForecastModelSelector(use_gpu=False)`
 
 **问题**：MILP优化求解缓慢
 **解决方案**：
-- 减少优化问题的规模（产品数量、时间范围）
-- 调整求解器参数，设置适当的求解时间限制
-- 尝试使用不同的求解器
+1. 调整求解器参数：
+   ```python
+   optimizer = MILPOptimizer(
+       solver="cbc",
+       time_limit=300,  # 设置5分钟求解时间限制
+       threads=4        # 使用4个线程
+   )
+   ```
+2. 减少优化问题规模：减少产品数量或时间范围
+3. 尝试使用不同的求解器：`cbc`、`glpk`、`gurobi`（需单独安装）
+4. 检查是否有过度约束的条件
 
 ### 9.3 API服务问题
 
 **问题**：API服务无法启动
 **解决方案**：
-- 检查端口是否被占用：`netstat -ano | findstr :8000`
-- 尝试使用不同的端口：修改`start_api.py`中的`PORT`变量
-- 检查依赖是否安装完整
+1. 检查端口是否被占用：
+   ```bash
+   # Windows
+   netstat -ano | findstr :8000
+   
+   # Linux/Mac
+   lsof -i :8000
+   ```
+2. 修改端口：编辑`start_api.py`中的`PORT`变量
+3. 检查依赖：`pip install fastapi uvicorn`
+4. 查看错误日志：`tail -n 100 logs/error.log`
 
 **问题**：API返回错误
 **解决方案**：
-- 查看API文档，确保请求格式正确
-- 检查系统日志，查看具体错误信息
-- 确保数据文件存在且格式正确
+1. 检查请求格式是否符合API文档规范
+2. 查看系统日志获取详细错误信息
+3. 验证数据文件是否存在且格式正确
+4. 检查数据库连接（如使用）
+5. 确保相关服务（Redis等）已启动
 
 ## 10. 扩展与定制
 
 ### 10.1 添加新的预测模型
 
-1. 在`forecast_models.py`中添加新模型类
-2. 实现`train`和`predict`方法
-3. 注册到模型选择器的模型列表中
+**步骤**：
+1. 在`src/forecast/forecast_models.py`中创建新模型类，继承自`BaseForecaster`
+2. 实现必要的方法：`train`、`predict`、`evaluate`
+3. 在模型类中添加模型元数据（名称、适用场景等）
+4. 在`src/forecast/forecast_model_selector.py`中注册新模型
+
+**示例**：
+```python
+# 在forecast_models.py中添加自定义模型
+class ARIMAForecaster(BaseForecaster):
+    def __init__(self, order=(1, 1, 1)):
+        self.order = order
+        self.model = None
+    
+    def train(self, X, y):
+        # 实现ARIMA模型训练逻辑
+        self.model = ARIMA(y, order=self.order)
+        self.model = self.model.fit()
+    
+    def predict(self, X):
+        # 实现预测逻辑
+        return self.model.forecast(steps=len(X))
+    
+    def evaluate(self, X, y):
+        # 实现评估逻辑
+        y_pred = self.predict(X)
+        return mean_absolute_error(y, y_pred)
+
+# 在forecast_model_selector.py中注册模型
+available_models = [
+    ARIMAForecaster,
+    XGBoostForecaster,
+    LGBMForecaster,
+    # 添加新模型
+]
+```
 
 ### 10.2 扩展MILP优化
 
-1. 在`milp_optimizer.py`中修改约束条件
-2. 添加新的目标函数项
-3. 扩展数据输入格式
+**扩展方向**：
+1. **添加新约束条件**：在`src/optimization/milp_optimizer.py`的`_define_constraints`方法中添加
+2. **扩展目标函数**：修改`_define_objective`方法
+3. **自定义优化参数**：在`__init__`方法中添加新参数
+4. **支持新的求解器**：扩展`solver`参数的处理逻辑
+
+**示例**：
+```python
+# 在milp_optimizer.py中添加新约束
+def _define_constraints(self, model, data):
+    # 现有约束...
+    
+    # 添加新的最小订货量约束
+    for i in range(len(data["products"])):
+        model += model.variables["orders"][i] >= data["products"][i]["min_order_quantity"]
+    
+    # 添加运输容量约束
+    model += sum(model.variables["orders"]) <= data["transport_capacity"]
+```
 
 ### 10.3 定制补货策略
 
-1. 在`automated_replenishment.py`中添加新策略
-2. 实现策略逻辑
-3. 注册到策略列表中
+**步骤**：
+1. 在`src/replenishment/automated_replenishment.py`中创建新策略类
+2. 实现`calculate_order_quantity`方法
+3. 在策略管理器中注册新策略
+
+**示例**：
+```python
+# 在automated_replenishment.py中添加新策略
+class MinMaxReplenishmentStrategy(BaseReplenishmentStrategy):
+    def __init__(self, min_level=100, max_level=500):
+        self.min_level = min_level
+        self.max_level = max_level
+    
+    def calculate_order_quantity(self, inventory_data, forecast_data):
+        orders = {}
+        for product_id, inv in inventory_data.items():
+            current_stock = inv["current_stock"]
+            if current_stock <= self.min_level:
+                orders[product_id] = self.max_level - current_stock
+            else:
+                orders[product_id] = 0
+        return orders
+
+# 在策略管理器中注册
+replenishment_strategies = {
+    "reorder_point": ReorderPointStrategy,
+    "min_max": MinMaxReplenishmentStrategy,  # 新策略
+    "economic_order_quantity": EOQStrategy,
+}
+
 
 ## 11. 示例脚本
 
-### 11.1 运行性能测试
+系统提供了多个示例脚本，用于演示和测试各种功能：
+
+### 11.1 性能测试脚本
 ```bash
 python test_performance.py
 ```
+**功能**：测试系统在不同数据规模和配置下的性能表现，包括预测速度、优化求解时间等指标。
 
-### 11.2 测试Feature Store功能
+**输出**：性能报告，包含各模块的执行时间和资源占用情况。
+
+### 11.2 Feature Store功能测试
 ```bash
 python test_feature_store.py
 ```
+**功能**：测试特征存储的创建、更新和查询功能，验证特征工程流程的正确性。
 
-### 11.3 测试模型可解释性
+**输出**：特征计算结果、存储效率和查询性能指标。
+
+### 11.3 模型可解释性测试
 ```bash
 python test_model_interpretability.py
 ```
+**功能**：展示模型预测结果的可解释性，包括特征重要性、SHAP值分析等。
 
-### 11.4 测试连续学习功能
+**输出**：可视化图表和解释性指标。
+
+### 11.4 连续学习功能测试
 ```bash
 python test_forecast_continuous_learning_simple.py
 ```
+**功能**：测试模型的连续学习能力，验证模型在新数据到来时的自适应更新机制。
 
-### 11.5 测试A/B测试框架
+**输出**：模型更新前后的性能对比。
+
+### 11.5 A/B测试框架测试
 ```bash
 python test_ab_testing.py
 ```
+**功能**：测试A/B测试框架的创建、运行和结果分析功能。
+
+**输出**：A/B测试结果报告和统计显著性分析。
 
 ## 12. A/B测试框架
 
 ### 12.1 概述
-A/B测试框架允许您在生产环境中比较不同模型的性能，以确定最佳模型。
 
-### 12.2 使用示例
+A/B测试框架允许您在生产环境中比较不同模型、策略或配置的性能，通过统计学方法确定最佳方案。框架支持：
+- 多种模型和策略的对比测试
+- 灵活的流量分配策略
+- 实时性能监控和统计分析
+- 自动显著性检验
+
+### 12.2 核心功能
+
+| 功能 | 描述 |
+|------|------|
+| 多模型对比 | 同时支持2个或多个模型的对比测试 |
+| 流量分配 | 支持随机分配、用户分组、时间分片等分配策略 |
+| 实时监控 | 实时追踪测试数据和性能指标 |
+| 统计分析 | 提供显著性检验（t-test、Chi-square等） |
+| 结果可视化 | 生成直观的测试结果报告和图表 |
+
+### 12.3 使用示例
 
 ```python
 from src.mlops.ab_testing.ab_test_manager import ABTestManager
+from src.mlops.ab_testing.traffic_split import TrafficSplitStrategy
 
 # 初始化A/B测试管理器
 ab_test_manager = ABTestManager()
 
-# 创建A/B测试
-ab_test = ab_test_manager.create_ab_test(
-    name="Model Comparison Test",
-    model_a="ARIMA",
-    model_b="XGBoost",
-    metric="mape"
-)
+# 创建A/B测试配置
+ab_test_config = {
+    "name": "Q4销售预测模型对比",
+    "models": ["ARIMA", "XGBoost", "LGBM"],  # 支持多模型对比
+    "metrics": ["mape", "rmse", "accuracy"],  # 多指标评估
+    "traffic_split": TrafficSplitStrategy.RANDOM,
+    "sample_size": 10000,
+    "significance_level": 0.05
+}
+
+# 创建并启动A/B测试
+ab_test = ab_test_manager.create_ab_test(**ab_test_config)
+ab_test_id = ab_test["id"]
 
 # 运行A/B测试
-ab_test_results = ab_test_manager.run_ab_test(ab_test)
+ab_test_results = ab_test_manager.run_ab_test(ab_test_id)
 
-# 分析A/B测试结果
+# 分析测试结果
 analysis = ab_test_manager.analyze_results(ab_test_results)
-print(f"A/B Test Results: {analysis}")
+print(f"A/B测试完成，最优模型: {analysis['best_model']}")
+print(f"显著性水平: {analysis['significance']}")
+
+# 生成测试报告
+report_path = ab_test_manager.generate_report(ab_test_results, format="html")
+print(f"测试报告已生成: {report_path}")
 ```
 
-## 13. 联系方式
+### 12.4 流量分配策略
 
-如有问题或建议，请联系项目维护人员。
+A/B测试框架支持多种流量分配策略：
+
+| 策略 | 描述 | 适用场景 |
+|------|------|----------|
+| RANDOM | 随机分配流量 | 通用场景，确保样本随机性 |
+| USER_BASED | 基于用户ID的一致性分配 | 需要为同一用户始终提供相同模型 |
+| TIME_BASED | 基于时间分片的分配 | 需要在不同时间段测试不同模型 |
+| GEO_BASED | 基于地理位置的分配 | 需要针对特定地区测试模型 |
+| SEGMENT_BASED | 基于用户分段的分配 | 需要针对特定用户群体测试模型 |
+
+## 13. 技术支持与联系方式
+
+### 13.1 技术支持
+
+- **文档中心**：查看最新的用户手册和API文档
+- **常见问题**：查看第9章常见问题与故障排除
+- **GitHub Issues**：提交bug报告和功能请求
+- **社区论坛**：参与讨论和获取帮助
+
+### 13.2 联系方式
+
+如有问题或建议，请通过以下方式联系项目维护团队：
+
+- **电子邮件**：support@supplychain-forecast.com
+- **GitHub仓库**：https://github.com/your-org/supplychain-forecast
+- **项目网站**：https://supplychain-forecast.com
 
 ---
 
-**更新日期**：2025-12-01  
-**版本**：1.0  
-**适用系统**：Windows/Linux/Mac
+## 文档元信息
+
+**文档名称**：模型使用指南
+**文档版本**：1.1
+**更新日期**：2025-12-01
+**适用系统**：Windows 10+/Linux/MacOS 10.15+
+**适用Python版本**：3.7-3.10
+
+**主要变更**：
+- 修复了目录与内容编号不匹配问题
+- 增强了安装指南的详细程度
+- 扩展了性能优化部分
+- 添加了A/B测试框架章节
+- 完善了常见问题的解决方案
+
+---
+
+© 2025 Supply Chain Forecast System. All rights reserved.

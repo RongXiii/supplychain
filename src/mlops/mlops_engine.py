@@ -9,7 +9,9 @@ import copy
 import time
 
 # 添加日志管理器
-from logging_manager import get_logger, log_performance
+from src.system.logging_manager import get_logger, log_performance
+# 导入A/B测试框架
+from src.mlops.ab_testing import ABTestManager, ABTestConfigManager
 
 class MLOpsEngine:
     """
@@ -41,6 +43,10 @@ class MLOpsEngine:
             'products': [],
             'traffic_split': 0.5
         }
+        
+        # 初始化A/B测试框架
+        self.ab_test_manager = ABTestManager(test_id='default')
+        self.ab_test_config_manager = ABTestConfigManager()
         
     def calculate_error_metrics(self, actual, forecast, product_id):
         """
@@ -250,15 +256,19 @@ class MLOpsEngine:
         
         return False, '无需重训'
     
-    def save_model(self, product_id, model, model_name, metrics):
+    def save_model(self, product_id, model, model_name, metrics, version=None):
         """
-        保存模型及其元数据
+        保存模型及其元数据，支持版本管理
         
         Args:
             product_id: 产品ID
             model: 模型对象
             model_name: 模型名称
             metrics: 模型指标
+            version: 版本号，若为None则自动生成
+        
+        Returns:
+            version: 保存的模型版本号
         """
         start_time = time.time()
         self.logger.info(f"Saving model for product: {product_id}, model_name: {model_name}")
@@ -282,43 +292,66 @@ class MLOpsEngine:
         # 确保product_id是Python原生类型
         product_id = convert_numpy_types(product_id)
         
-        # 保存模型文件
-        model_path = os.path.join(self.models_dir, f'model_{product_id}.pkl')
-        joblib.dump(model, model_path)
-        self.logger.debug(f"Saved model file: {model_path}")
+        # 获取或生成版本号
+        if version is None:
+            version = self._generate_version_number(product_id)
+        
+        # 保存特定版本的模型文件
+        version_model_path = os.path.join(self.models_dir, f'model_{product_id}_{version}.pkl')
+        joblib.dump(model, version_model_path)
+        self.logger.debug(f"Saved versioned model file: {version_model_path}")
+        
+        # 同时保持最新模型的引用
+        latest_model_path = os.path.join(self.models_dir, f'model_{product_id}.pkl')
+        joblib.dump(model, latest_model_path)
+        self.logger.debug(f"Updated latest model file: {latest_model_path}")
         
         # 转换指标中的numpy类型
         converted_metrics = convert_numpy_types(metrics)
         
-        # 保存模型元数据
+        # 保存模型元数据，包含版本信息
         model_metadata = {
             'product_id': product_id,
             'model_name': model_name,
+            'version': version,
             'metrics': converted_metrics,
             'save_time': datetime.now().isoformat()
         }
         
-        metadata_path = os.path.join(self.models_dir, f'model_{product_id}_metadata.json')
-        with open(metadata_path, 'w') as f:
+        # 保存特定版本的元数据
+        version_metadata_path = os.path.join(self.models_dir, f'model_{product_id}_metadata_{version}.json')
+        with open(version_metadata_path, 'w') as f:
             json.dump(model_metadata, f, indent=2)
-        self.logger.debug(f"Saved model metadata: {metadata_path}")
+        self.logger.debug(f"Saved versioned model metadata: {version_metadata_path}")
+        
+        # 更新最新元数据
+        latest_metadata_path = os.path.join(self.models_dir, f'model_{product_id}_metadata.json')
+        with open(latest_metadata_path, 'w') as f:
+            json.dump(model_metadata, f, indent=2)
+        self.logger.debug(f"Updated latest model metadata: {latest_metadata_path}")
         
         # 更新模型历史记录
         if product_id not in self.model_history:
             self.model_history[product_id] = []
         
         self.model_history[product_id].append({
-            'model_path': model_path,
-            'metadata_path': metadata_path,
+            'version': version,
+            'model_path': version_model_path,
+            'metadata_path': version_metadata_path,
             'save_time': datetime.now().isoformat()
         })
         
-        self.logger.info(f"Model saved successfully for product: {product_id}")
-        log_performance("save_model", time.time() - start_time, product_id=product_id, model_name=model_name)
+        # 保存模型历史记录到文件
+        self._save_model_history(product_id)
+        
+        self.logger.info(f"Model saved successfully for product: {product_id}, version: {version}")
+        log_performance("save_model", time.time() - start_time, product_id=product_id, model_name=model_name, version=version)
+        
+        return version
     
     def load_model(self, product_id, version='latest'):
         """
-        加载模型
+        加载模型，支持版本管理
         
         Args:
             product_id: 产品ID
@@ -333,13 +366,13 @@ class MLOpsEngine:
         
         import joblib
         
+        # 获取模型文件路径
         if version == 'latest':
             # 加载最新模型
             metadata_path = os.path.join(self.models_dir, f'model_{product_id}_metadata.json')
             model_path = os.path.join(self.models_dir, f'model_{product_id}.pkl')
         else:
             # 加载指定版本模型
-            # 这里简化处理，实际可以实现版本管理
             metadata_path = os.path.join(self.models_dir, f'model_{product_id}_metadata_{version}.json')
             model_path = os.path.join(self.models_dir, f'model_{product_id}_{version}.pkl')
         
@@ -358,6 +391,158 @@ class MLOpsEngine:
         
         log_performance("load_model", time.time() - start_time, product_id=product_id, version=version, model_name=metadata.get('model_name', 'unknown'))
         return model, metadata
+    
+    def _generate_version_number(self, product_id):
+        """
+        为新模型生成版本号
+        
+        Args:
+            product_id: 产品ID
+            
+        Returns:
+            version: 生成的版本号
+        """
+        # 加载模型历史记录
+        self._load_model_history(product_id)
+        
+        if product_id not in self.model_history or len(self.model_history[product_id]) == 0:
+            return 'v1'
+        
+        # 找到最新版本号并递增
+        versions = [entry['version'] for entry in self.model_history[product_id]]
+        versions.sort()
+        
+        # 解析最新版本号，如v1 -> 1
+        latest_version = versions[-1]
+        version_num = int(latest_version[1:]) if latest_version.startswith('v') else int(latest_version)
+        
+        # 生成新版本号
+        return f'v{version_num + 1}'
+    
+    def _save_model_history(self, product_id):
+        """
+        保存模型历史记录到文件
+        
+        Args:
+            product_id: 产品ID
+        """
+        history_file = os.path.join(self.models_dir, f'model_history_{product_id}.json')
+        with open(history_file, 'w') as f:
+            json.dump(self.model_history.get(product_id, []), f, indent=2)
+    
+    def _load_model_history(self, product_id):
+        """
+        从文件加载模型历史记录
+        
+        Args:
+            product_id: 产品ID
+        """
+        history_file = os.path.join(self.models_dir, f'model_history_{product_id}.json')
+        if os.path.exists(history_file):
+            with open(history_file, 'r') as f:
+                self.model_history[product_id] = json.load(f)
+    
+    def list_model_versions(self, product_id):
+        """
+        列出产品的所有模型版本
+        
+        Args:
+            product_id: 产品ID
+            
+        Returns:
+            versions: 版本列表，包含版本号和元数据
+        """
+        # 加载模型历史记录
+        self._load_model_history(product_id)
+        
+        if product_id not in self.model_history:
+            return []
+        
+        # 返回按版本号排序的版本列表
+        versions = sorted(self.model_history[product_id], key=lambda x: x['version'])
+        return versions
+    
+    def rollback_model(self, product_id, version):
+        """
+        回滚模型到指定版本
+        
+        Args:
+            product_id: 产品ID
+            version: 要回滚到的版本号
+            
+        Returns:
+            success: 是否回滚成功
+        """
+        self.logger.info(f"Rolling back model for product: {product_id} to version: {version}")
+        
+        # 加载指定版本的模型
+        model, metadata = self.load_model(product_id, version)
+        if not model or not metadata:
+            self.logger.error(f"Failed to load model version: {version} for product: {product_id}")
+            return False
+        
+        # 保存为最新版本
+        latest_model_path = os.path.join(self.models_dir, f'model_{product_id}.pkl')
+        latest_metadata_path = os.path.join(self.models_dir, f'model_{product_id}_metadata.json')
+        
+        import joblib
+        joblib.dump(model, latest_model_path)
+        
+        with open(latest_metadata_path, 'w') as f:
+            json.dump(metadata, f, indent=2)
+        
+        self.logger.info(f"Model rolled back successfully for product: {product_id} to version: {version}")
+        return True
+    
+    def delete_model_version(self, product_id, version):
+        """
+        删除指定版本的模型
+        
+        Args:
+            product_id: 产品ID
+            version: 要删除的版本号
+            
+        Returns:
+            success: 是否删除成功
+        """
+        self.logger.info(f"Deleting model version: {version} for product: {product_id}")
+        
+        # 加载模型历史记录
+        self._load_model_history(product_id)
+        
+        if product_id not in self.model_history:
+            self.logger.error(f"No model history found for product: {product_id}")
+            return False
+        
+        # 查找要删除的版本
+        version_entry = None
+        for entry in self.model_history[product_id]:
+            if entry['version'] == version:
+                version_entry = entry
+                break
+        
+        if not version_entry:
+            self.logger.error(f"Model version: {version} not found for product: {product_id}")
+            return False
+        
+        # 删除模型文件和元数据文件
+        try:
+            if os.path.exists(version_entry['model_path']):
+                os.remove(version_entry['model_path'])
+            if os.path.exists(version_entry['metadata_path']):
+                os.remove(version_entry['metadata_path'])
+        except Exception as e:
+            self.logger.error(f"Error deleting model files: {e}")
+            return False
+        
+        # 从历史记录中移除该版本
+        self.model_history[product_id].remove(version_entry)
+        
+        # 保存更新后的历史记录
+        self._save_model_history(product_id)
+        
+        self.logger.info(f"Model version: {version} deleted successfully for product: {product_id}")
+        return True
     
     def enable_gray_release(self, products, traffic_split=0.5):
         """
@@ -385,7 +570,7 @@ class MLOpsEngine:
     
     def get_policy_for_product(self, product_id):
         """
-        获取产品的当前策略（根据灰度配置）
+        获取产品的当前策略（根据灰度配置或A/B测试配置）
         
         Args:
             product_id: 产品ID
@@ -393,6 +578,13 @@ class MLOpsEngine:
         Returns:
             policy: 当前策略
         """
+        # 首先检查是否有正在进行的A/B测试
+        active_test = self.ab_test_manager.get_active_test_for_product(product_id)
+        if active_test:
+            # 使用A/B测试的流量分配
+            return self.ab_test_manager.get_treatment_for_product(product_id)
+        
+        # 否则使用灰度配置
         if not self.gray_release_config['enabled'] or product_id not in self.gray_release_config['products']:
             # 不使用灰度，返回当前策略
             return self.current_policies.get(product_id, {})
@@ -447,6 +639,129 @@ class MLOpsEngine:
         # 保存更新后的指标
         with open(metrics_file, 'w') as f:
             json.dump(existing_metrics, f, indent=2)
+    
+    # A/B测试相关方法
+    def create_ab_test(self, test_id, name, description, treatments, traffic_allocation, products):
+        """
+        创建A/B测试
+        
+        Args:
+            test_id: 测试ID
+            name: 测试名称
+            description: 测试描述
+            treatments: 处理组列表，每个处理组包含treatment_id和对应的策略
+            traffic_allocation: 流量分配比例
+            products: 参与测试的产品列表
+            
+        Returns:
+            test_id: 创建的测试ID
+        """
+        self.logger.info(f"Creating A/B test: {test_id} for products: {products}")
+        
+        # 创建测试配置
+        test_config = {
+            'test_id': test_id,
+            'name': name,
+            'description': description,
+            'treatments': treatments,
+            'traffic_allocation': traffic_allocation,
+            'products': products
+        }
+        
+        # 使用ABTestConfigManager创建测试
+        self.ab_test_config_manager.create_test(test_config)
+        
+        return test_id
+    
+    def start_ab_test(self, test_id):
+        """
+        启动A/B测试
+        
+        Args:
+            test_id: 测试ID
+            
+        Returns:
+            success: 是否启动成功
+        """
+        self.logger.info(f"Starting A/B test: {test_id}")
+        
+        # 获取测试配置
+        test_config = self.ab_test_config_manager.get_test_config(test_id)
+        if not test_config:
+            self.logger.error(f"Test configuration not found: {test_id}")
+            return False
+        
+        # 使用ABTestManager启动测试
+        return self.ab_test_manager.start_test(test_config)
+    
+    def end_ab_test(self, test_id):
+        """
+        结束A/B测试
+        
+        Args:
+            test_id: 测试ID
+            
+        Returns:
+            results: 测试结果
+        """
+        self.logger.info(f"Ending A/B test: {test_id}")
+        
+        # 结束测试并获取结果
+        results = self.ab_test_manager.end_test(test_id)
+        
+        if results:
+            # 保存测试结果
+            results_file = os.path.join(self.metrics_dir, 'ab_tests', f'results_{test_id}.json')
+            with open(results_file, 'w') as f:
+                json.dump(results, f, indent=2)
+            
+        return results
+    
+    def record_ab_test_result(self, test_id, product_id, treatment_id, actual, forecast):
+        """
+        记录A/B测试结果
+        
+        Args:
+            test_id: 测试ID
+            product_id: 产品ID
+            treatment_id: 处理组ID
+            actual: 实际值
+            forecast: 预测值
+            
+        Returns:
+            success: 是否记录成功
+        """
+        self.logger.debug(f"Recording A/B test result: test_id={test_id}, product_id={product_id}, treatment_id={treatment_id}")
+        
+        # 计算指标
+        metrics = self.calculate_error_metrics(actual, forecast, product_id)
+        if not metrics:
+            self.logger.warning(f"Failed to calculate metrics for A/B test result: test_id={test_id}, product_id={product_id}")
+            return False
+        
+        # 记录结果
+        return self.ab_test_manager.record_result(test_id, product_id, treatment_id, metrics)
+    
+    def get_ab_test_results(self, test_id):
+        """
+        获取A/B测试结果
+        
+        Args:
+            test_id: 测试ID
+            
+        Returns:
+            results: 测试结果
+        """
+        return self.ab_test_manager.get_test_results(test_id)
+    
+    def get_all_ab_tests(self):
+        """
+        获取所有A/B测试
+        
+        Returns:
+            tests: 所有测试的列表
+        """
+        return self.ab_test_config_manager.get_all_tests()
     
     def _save_params(self, product_id, params):
         """

@@ -1,21 +1,13 @@
 import numpy as np
 import pandas as pd
-# 设置matplotlib使用非交互式后端，避免弹出窗口
-import matplotlib
-matplotlib.use('Agg')
-import matplotlib.pyplot as plt
-import seaborn as sns
 from sklearn.inspection import PartialDependenceDisplay, permutation_importance
 import shap
 import lime
 import lime.lime_tabular
 import json
 import os
+import uuid
 from datetime import datetime
-
-# 设置中文显示
-plt.rcParams['font.sans-serif'] = ['SimHei', 'Microsoft YaHei']
-plt.rcParams['axes.unicode_minus'] = False
 
 class ModelInterpreter:
     """
@@ -57,6 +49,37 @@ class ModelInterpreter:
         file_path = os.path.join(self.model_dir, f"{explanation_id}.json")
         with open(file_path, 'r') as f:
             return json.load(f)
+    
+    def _is_shap_compatible(self, model):
+        """检查模型是否与SHAP兼容
+        
+        参数:
+            model: 机器学习模型对象
+            
+        返回:
+            bool: 模型是否兼容SHAP
+        """
+        model_type = type(model).__name__
+        
+        # 检查是否为树模型或线性模型
+        tree_models = ['RandomForestRegressor', 'RandomForestClassifier', 
+                      'XGBRegressor', 'XGBClassifier', 
+                      'LGBMRegressor', 'LGBMClassifier',
+                      'GradientBoostingRegressor', 'GradientBoostingClassifier',
+                      'DecisionTreeRegressor', 'DecisionTreeClassifier']
+        
+        linear_models = ['LinearRegression', 'LogisticRegression',
+                        'Ridge', 'Lasso', 'ElasticNet']
+        
+        if model_type in tree_models:
+            return True
+        elif model_type in linear_models:
+            return True
+        elif hasattr(model, 'predict'):
+            # 对于其他类型的模型，尝试使用KernelExplainer
+            return True
+        else:
+            return False
     
     def get_shap_explanation(self, model, X, feature_names=None, sample_size=100):
         """
@@ -104,38 +127,107 @@ class ModelInterpreter:
         
         return shap_values, expected_value, explainer, X_sample
     
-    def plot_shap_summary(self, shap_values, X, feature_names=None, explanation_id=None):
-        """绘制SHAP摘要图"""
-        # SHAP的summary_plot会创建自己的figure，不需要提前创建
-        try:
-            # 直接使用SHAP的summary_plot，设置show=False避免自动显示
-            shap.summary_plot(shap_values, X, feature_names=feature_names, plot_type="bar", show=False)
+    def get_shap_summary_data(self, shap_values, X, feature_names=None):
+        """
+        获取SHAP摘要数据（JSON格式）
+        
+        Args:
+            shap_values: SHAP值
+            X: 特征数据
+            feature_names: 特征名称列表
             
-            # 保存图像
-            if explanation_id:
-                fig_path = os.path.join(self.fig_dir, f"{explanation_id}_shap_summary.png")
-                plt.savefig(fig_path, bbox_inches='tight', dpi=300)
-        except Exception as e:
-            print(f"绘制SHAP摘要图时出错: {e}")
-        finally:
-            # 确保关闭所有figure，避免内存泄漏
-            plt.close('all')
+        Returns:
+            data: JSON格式的SHAP摘要数据
+        """
+        # 转换为DataFrame
+        if not isinstance(X, pd.DataFrame):
+            if feature_names is None:
+                feature_names = [f"feature_{i}" for i in range(X.shape[1])]
+            X = pd.DataFrame(X, columns=feature_names)
+        else:
+            feature_names = X.columns.tolist()
+        
+        # 计算每个特征的平均SHAP值绝对值（重要性）
+        if isinstance(shap_values, list):
+            # 多分类情况，取第一类
+            shap_values = shap_values[0]
+        
+        # 计算每个特征的平均SHAP值和绝对值
+        mean_shap = np.mean(shap_values, axis=0)
+        mean_abs_shap = np.mean(np.abs(shap_values), axis=0)
+        
+        # 创建特征重要性数据
+        shap_summary_data = []
+        for i, feature in enumerate(feature_names):
+            shap_summary_data.append({
+                'feature': feature,
+                'mean_shap': float(mean_shap[i]),
+                'mean_abs_shap': float(mean_abs_shap[i]),
+                'index': i
+            })
+        
+        # 按平均绝对值排序
+        shap_summary_data.sort(key=lambda x: x['mean_abs_shap'], reverse=True)
+        
+        return {
+            'summary': shap_summary_data,
+            'shap_values': shap_values.tolist(),
+            'feature_names': feature_names,
+            'sample_size': shap_values.shape[0]
+        }
     
-    def plot_shap_force(self, explainer, expected_value, shap_values, X, instance_idx=0, explanation_id=None):
-        """绘制SHAP力图"""
-        try:
-            # SHAP的force_plot使用matplotlib=True时会创建自己的figure
-            shap.force_plot(expected_value, shap_values[instance_idx], X.iloc[instance_idx], matplotlib=True, show=False)
+    def get_shap_force_data(self, explainer, expected_value, shap_values, X, instance_idx=0):
+        """
+        获取SHAP力图数据（JSON格式）
+        
+        Args:
+            explainer: SHAP解释器
+            expected_value: 预期值
+            shap_values: SHAP值
+            X: 特征数据
+            instance_idx: 要解释的实例索引
             
-            # 保存图像
-            if explanation_id:
-                fig_path = os.path.join(self.fig_dir, f"{explanation_id}_shap_force_{instance_idx}.png")
-                plt.savefig(fig_path, bbox_inches='tight', dpi=300, pad_inches=0.5)
-        except Exception as e:
-            print(f"绘制SHAP力图时出错: {e}")
-        finally:
-            # 确保关闭所有figure
-            plt.close('all')
+        Returns:
+            data: JSON格式的SHAP力图数据
+        """
+        # 转换为DataFrame
+        if not isinstance(X, pd.DataFrame):
+            feature_names = [f"feature_{i}" for i in range(X.shape[1])]
+            X = pd.DataFrame(X, columns=feature_names)
+        
+        # 获取单个实例的数据
+        instance = X.iloc[instance_idx]
+        
+        # 处理SHAP值
+        if isinstance(shap_values, list):
+            # 多分类情况，取第一类
+            instance_shap = shap_values[0][instance_idx]
+        else:
+            instance_shap = shap_values[instance_idx]
+        
+        # 计算预测值
+        predicted_value = float(expected_value) + np.sum(instance_shap)
+        
+        # 创建特征贡献数据
+        feature_contributions = []
+        for i, feature in enumerate(X.columns):
+            feature_contributions.append({
+                'feature': feature,
+                'value': float(instance.iloc[i]),
+                'contribution': float(instance_shap[i]),
+                'abs_contribution': abs(float(instance_shap[i]))
+            })
+        
+        # 按贡献绝对值排序
+        feature_contributions.sort(key=lambda x: x['abs_contribution'], reverse=True)
+        
+        return {
+            'instance_idx': instance_idx,
+            'expected_value': float(expected_value) if isinstance(expected_value, (int, float)) else expected_value.tolist(),
+            'predicted_value': predicted_value,
+            'feature_contributions': feature_contributions,
+            'original_features': instance.to_dict()
+        }
     
     def get_lime_explanation(self, model, X_train, X_test, feature_names=None, instance_idx=0, num_features=10):
         """
@@ -191,90 +283,152 @@ class ModelInterpreter:
                 print(f"模型predict方法测试出错: {pred_e}")
             return None
     
-    def plot_lime_explanation(self, lime_explanation, explanation_id=None):
-        """绘制LIME解释图"""
-        try:
-            # as_pyplot_figure()会返回一个Figure对象，我们应该使用这个对象来保存
-            fig = lime_explanation.as_pyplot_figure()
-            fig.set_size_inches(12, 8)  # 设置图表大小
-            
-            # 使用返回的Figure对象保存图像
-            if explanation_id:
-                fig_path = os.path.join(self.fig_dir, f"{explanation_id}_lime.png")
-                fig.savefig(fig_path, bbox_inches='tight', dpi=300)
-        except Exception as e:
-            print(f"绘制LIME解释图时出错: {e}")
-        finally:
-            # 确保关闭所有figure
-            plt.close('all')
-    
-    def plot_partial_dependence(self, model, X, features, feature_names=None, explanation_id=None):
+    def get_lime_data(self, lime_explanation, feature_names=None):
         """
-        绘制部分依赖图
+        获取LIME解释数据（JSON格式）
+        
+        Args:
+            lime_explanation: LIME解释结果
+            feature_names: 特征名称列表
+            
+        Returns:
+            data: JSON格式的LIME解释数据
+        """
+        if lime_explanation is None:
+            return None
+        
+        # 获取LIME解释的特征列表
+        lime_features = lime_explanation.as_list()
+        
+        # 如果没有提供特征名称，则使用LIME默认的特征名
+        if feature_names is None:
+            feature_names = [f"feature_{i}" for i in range(len(lime_features))]
+        
+        # 转换为结构化数据
+        lime_data = {
+            'predicted_value': float(lime_explanation.predict_proba[0] if hasattr(lime_explanation, 'predict_proba') else lime_explanation.predicted_value),
+            'prediction_score': float(lime_explanation.score),
+            'intercept': float(lime_explanation.intercept[0] if hasattr(lime_explanation.intercept, '__len__') else lime_explanation.intercept),
+            'feature_importance': []
+        }
+        
+        # 处理特征重要性
+        for feature, weight in lime_features:
+            # 解析特征名和值
+            if '>' in feature:
+                # 连续特征
+                parts = feature.split(' > ')
+                if len(parts) == 2:
+                    feature_name = parts[0]
+                    feature_value = float(parts[1])
+                else:
+                    feature_name = feature
+                    feature_value = 0.0
+            elif '<=' in feature:
+                # 连续特征
+                parts = feature.split(' <= ')
+                if len(parts) == 2:
+                    feature_name = parts[0]
+                    feature_value = float(parts[1])
+                else:
+                    feature_name = feature
+                    feature_value = 0.0
+            elif '=' in feature:
+                # 分类特征
+                parts = feature.split(' = ')
+                if len(parts) == 2:
+                    feature_name = parts[0]
+                    feature_value = parts[1]
+                else:
+                    feature_name = feature
+                    feature_value = 'unknown'
+            else:
+                # 其他情况
+                feature_name = feature
+                feature_value = 'unknown'
+            
+            lime_data['feature_importance'].append({
+                'feature': feature_name,
+                'weight': float(weight),
+                'value': feature_value,
+                'abs_weight': abs(float(weight))
+            })
+        
+        # 按权重绝对值排序
+        lime_data['feature_importance'].sort(key=lambda x: x['abs_weight'], reverse=True)
+        
+        return lime_data
+    
+    def get_partial_dependence_data(self, model, X, features, feature_names=None):
+        """
+        获取部分依赖图(PDP)数据（JSON格式）
         
         Args:
             model: 训练好的模型
-            X: 特征数据
-            features: 要分析的特征索引或名称
+            X: 特征矩阵
+            features: 特征索引或索引列表
             feature_names: 特征名称列表
-            explanation_id: 解释ID
+            
+        Returns:
+            data: JSON格式的部分依赖图数据
         """
         try:
-            # 转换为DataFrame并进行严格的数据检查
+            # 转换为DataFrame
             if not isinstance(X, pd.DataFrame):
                 if feature_names is None:
                     feature_names = [f"feature_{i}" for i in range(X.shape[1])]
                 X = pd.DataFrame(X, columns=feature_names)
             
-            # 确保X不为空且包含有效数据
+            # 确保X不为空
             if X.empty:
                 raise ValueError("输入数据X不能为空")
             
-            # 确保features是有效的非空列表
-            if not features:
-                raise ValueError("特征列表features不能为空")
+            # 确保features是列表
+            if not isinstance(features, (list, tuple)):
+                features = [features]
             
-            # 确保特征存在于数据中
+            # 确保特征有效
             if isinstance(features[0], str):
-                # 特征是名称，检查是否都存在
-                missing_features = [f for f in features if f not in X.columns]
-                if missing_features:
-                    raise ValueError(f"以下特征不存在于数据中: {missing_features}")
+                # 转换特征名称为索引
+                feature_indices = [X.columns.get_loc(f) for f in features]
             else:
-                # 特征是索引，检查是否在有效范围内
-                max_idx = X.shape[1] - 1
-                invalid_indices = [f for f in features if f < 0 or f > max_idx]
-                if invalid_indices:
-                    raise ValueError(f"以下特征索引无效，有效范围是0到{max_idx}: {invalid_indices}")
+                feature_indices = features
             
-            # 创建figure和axes（在数据检查通过后）
-            fig, ax = plt.subplots(figsize=(12, 8))
+            pdp_data = []
             
-            # 生成部分依赖图，指定axes
-            PartialDependenceDisplay.from_estimator(
-                model, 
-                X, 
-                features, 
+            # 生成部分依赖图数据
+            display = PartialDependenceDisplay.from_estimator(
+                model,
+                X,
+                feature_indices,
                 feature_names=feature_names,
-                grid_resolution=20,
-                ax=ax
+                grid_resolution=100
             )
             
-            # 添加标题和调整布局
-            plt.title('Partial Dependence Plots')
-            plt.tight_layout()
+            # 提取数据
+            for i, (feature_idx, ax) in enumerate(zip(feature_indices, display.axes_.flatten())):
+                # 获取线对象
+                line = ax.lines[0] if ax.lines else None
+                if line:
+                    x_values = line.get_xdata().tolist()
+                    y_values = line.get_ydata().tolist()
+                    
+                    pdp_item = {
+                        'feature_index': feature_idx,
+                        'feature_name': feature_names[feature_idx],
+                        'feature_values': [float(val) for val in x_values],
+                        'pdp_values': [float(val) for val in y_values],
+                        'min_pdp_value': float(min(y_values)),
+                        'max_pdp_value': float(max(y_values))
+                    }
+                    pdp_data.append(pdp_item)
             
-            # 保存图像（使用fig.savefig确保保存正确的figure）
-            if explanation_id:
-                fig_path = os.path.join(self.fig_dir, f"{explanation_id}_partial_dependence.png")
-                fig.savefig(fig_path, bbox_inches='tight', dpi=300)
-            
-            # 关闭figure
-            plt.close(fig)
+            return pdp_data
         except Exception as e:
-            print(f"绘制部分依赖图时出错: {e}")
-            # 确保关闭所有figure以避免内存泄漏
-            plt.close('all')
+            print(f"获取部分依赖图数据时出错: {e}")
+            import traceback
+            traceback.print_exc()
+            return None
     
     def get_feature_importance(self, model, X, y, feature_names=None, method='permutation'):
         """
@@ -285,199 +439,151 @@ class ModelInterpreter:
             X: 特征数据
             y: 目标变量
             feature_names: 特征名称列表
-            method: 重要性计算方法 ('permutation', 'coef', 'gain')
+            method: 特征重要性计算方法，可选值为'permutation'（默认）、'coef'、'gain'
             
         Returns:
-            feature_importance: 特征重要性DataFrame
+            feature_importance: 特征重要性数据（JSON格式）
         """
-        # 转换为DataFrame
-        if not isinstance(X, pd.DataFrame):
-            if feature_names is None:
-                feature_names = [f"feature_{i}" for i in range(X.shape[1])]
-            X = pd.DataFrame(X, columns=feature_names)
-        
-        # 不同模型类型和方法的处理逻辑
-        if hasattr(model, 'feature_importances_') and method in ['gain', 'native', 'built-in']:
-            # 使用模型自带的特征重要性
-            importances = model.feature_importances_
-            std = np.zeros(len(importances))  # 对于树模型，无法直接获取标准误差
-        elif hasattr(model, 'coef_') and method in ['coef', 'native', 'built-in']:
-            # 线性模型系数
-            importances = np.abs(model.coef_)
-            if len(importances.shape) > 1:
-                importances = np.mean(importances, axis=0)
-            std = np.zeros(len(importances))
-        else:
-            # 使用排列重要性
-            result = permutation_importance(
-                model, X, y, n_repeats=10, random_state=42, n_jobs=-1
-            )
-            importances = result.importances_mean
-            std = result.importances_std
-        
-        # 创建DataFrame
-        feature_importance = pd.DataFrame({
-            'feature': X.columns,
-            'importance': importances,
-            'std': std
-        })
-        
-        # 按重要性排序
-        feature_importance = feature_importance.sort_values('importance', ascending=False)
-        
-        return feature_importance
-    
-    def plot_feature_importance(self, feature_importance, explanation_id=None):
-        """绘制特征重要性图"""
-        plt.figure(figsize=(12, 8))
-        
-        # 确保feature_importance不为空
-        if feature_importance.empty:
-            plt.title('特征重要性 - 无可用特征')
-            plt.close()
-            return None
-        
         try:
-            # 简化版本：不使用误差线，避免xerr形状不匹配问题
-            sns.barplot(
-                x='importance', 
-                y='feature', 
-                data=feature_importance
-            )
+            # 转换为DataFrame
+            if not isinstance(X, pd.DataFrame):
+                if feature_names is None:
+                    feature_names = [f"feature_{i}" for i in range(X.shape[1])]
+                X = pd.DataFrame(X, columns=feature_names)
+            else:
+                feature_names = X.columns.tolist()
             
-            plt.title('特征重要性', fontsize=16)
-            plt.xlabel('重要性', fontsize=14)
-            plt.ylabel('特征', fontsize=14)
-            plt.tight_layout()
+            # 不同模型类型和方法的处理逻辑
+            if method == 'coef' and hasattr(model, 'coef_'):
+                # 使用模型的coef_属性获取特征重要性
+                importances = model.coef_[0] if len(model.coef_.shape) > 1 else model.coef_
+            elif method == 'gain' and hasattr(model, 'feature_importances_'):
+                # 使用模型的feature_importances_属性获取特征重要性
+                importances = model.feature_importances_
+            else:
+                # 默认使用排列重要性
+                result = permutation_importance(
+                    model, X, y, n_repeats=30, random_state=42, n_jobs=-1
+                )
+                importances = result.importances_mean
             
-            # 保存图像
-            fig_path = None
-            if explanation_id:
-                fig_path = os.path.join(self.fig_dir, f"{explanation_id}_feature_importance.png")
-                plt.savefig(fig_path, bbox_inches='tight', dpi=300)
+            # 构建特征重要性列表
+            feature_importance = []
+            for i, imp in enumerate(importances):
+                feature_importance.append({
+                    'feature_index': i,
+                    'feature_name': feature_names[i],
+                    'importance': float(imp),
+                    'abs_importance': float(abs(imp))
+                })
+            
+            # 按绝对重要性排序
+            feature_importance.sort(key=lambda x: x['abs_importance'], reverse=True)
+            
+            return feature_importance
         except Exception as e:
-            print(f"绘制特征重要性图时出错: {e}")
-            # 进一步简化：仅绘制基本图表
-            plt.title('特征重要性 - 绘制失败')
-            fig_path = None
-        finally:
-            plt.close()
-        
-        return fig_path
+            print(f"计算特征重要性时出错: {e}")
+            return None
     
     def generate_model_explanation(self, model, X_train, X_test, y_train, feature_names=None, 
-                                  sample_size=100, num_features=10):
+                                   n_samples=10):
         """
-        生成完整的模型解释报告
+        生成完整的模型解释报告（JSON格式）
         
         Args:
             model: 训练好的模型
             X_train: 训练数据
             X_test: 测试数据
-            y_train: 训练标签
+            y_train: 训练目标
             feature_names: 特征名称列表
-            sample_size: 用于解释的样本大小
-            num_features: 要显示的特征数量
+            n_samples: 用于LIME解释的样本数量
             
         Returns:
-            explanation_data: 解释数据
-            explanation_id: 解释ID
-            file_path: 保存路径
+            explanation_data: 解释数据字典（JSON格式）
         """
         try:
-            explanation_id = self.generate_explanation_id()
+            if feature_names is None:
+                feature_names = [f"feature_{i}" for i in range(X_train.shape[1])]
             
-            # 转换为DataFrame并进行数据校验
-            if not isinstance(X_train, pd.DataFrame):
-                if feature_names is None:
-                    feature_names = [f"feature_{i}" for i in range(X_train.shape[1])]
-                X_train_df = pd.DataFrame(X_train, columns=feature_names)
-            else:
-                X_train_df = X_train
-                feature_names = X_train.columns.tolist()
+            # 转换为numpy数组
+            if isinstance(X_train, pd.DataFrame):
+                X_train = X_train.values
+            if isinstance(X_test, pd.DataFrame):
+                X_test = X_test.values
+            if isinstance(y_train, pd.Series):
+                y_train = y_train.values
             
-            if not isinstance(X_test, pd.DataFrame):
-                X_test_df = pd.DataFrame(X_test, columns=feature_names)
-            else:
-                X_test_df = X_test
-            
-            # 确保数据不为空
-            if X_train_df.empty or X_test_df.empty:
-                raise ValueError("训练或测试数据不能为空")
-            
-            # 1. 特征重要性
-            feature_importance = self.get_feature_importance(model, X_train_df, y_train)
-            self.plot_feature_importance(feature_importance, explanation_id)
-            
-            # 2. SHAP解释
-            shap_values, expected_value, explainer, X_sample = self.get_shap_explanation(
-                model, X_train_df, feature_names=feature_names, sample_size=sample_size
-            )
-            self.plot_shap_summary(shap_values, X_sample, feature_names=feature_names, explanation_id=explanation_id)
-            
-            # 3. 绘制前5个实例的SHAP力图
-            for i in range(min(5, len(X_sample))):
-                try:
-                    self.plot_shap_force(explainer, expected_value, shap_values, X_sample, instance_idx=i, explanation_id=explanation_id)
-                except Exception as e:
-                    print(f"绘制SHAP力图时出错 (实例 {i}): {e}")
-            
-            # 4. LIME解释 - 确保测试数据有足够实例
-            if len(X_test_df) > 0:
-                try:
-                    lime_exp = self.get_lime_explanation(model, X_train_df, X_test_df, instance_idx=0, num_features=num_features)
-                    self.plot_lime_explanation(lime_exp, explanation_id=explanation_id)
-                    # 生成LIME解释的文本表示
-                    lime_features = [(feature_names[i], weight) for i, weight in lime_exp.as_list()]
-                except Exception as e:
-                    print(f"生成LIME解释时出错: {e}")
-                    lime_features = []
-            else:
-                lime_features = []
-            
-            # 5. 部分依赖图（前3个重要特征）
-            try:
-                top_features = feature_importance['feature'].head(3).tolist()
-                if top_features:  # 确保有特征可以绘制
-                    self.plot_partial_dependence(model, X_train_df, top_features, feature_names=feature_names, explanation_id=explanation_id)
-            except Exception as e:
-                print(f"生成部分依赖图时出错: {e}")
-                top_features = []
-            
-            # 构建解释数据
             explanation_data = {
-                "explanation_id": explanation_id,
-                "timestamp": datetime.now().isoformat(),
-                "model_type": type(model).__name__,
-                "feature_names": feature_names,
-                "data_shape": {
-                    "train": X_train.shape,
-                    "test": X_test.shape
-                },
-                "feature_importance": feature_importance.to_dict(orient='records'),
-                "lime_explanation": lime_features,
-                "shap_expected_value": float(expected_value) if isinstance(expected_value, (int, float)) else expected_value.tolist(),
-                "top_features": top_features,
-                "figures": {
-                    "feature_importance": f"{explanation_id}_feature_importance.png",
-                    "shap_summary": f"{explanation_id}_shap_summary.png",
-                    "lime": f"{explanation_id}_lime.png" if lime_features else None,
-                    "partial_dependence": f"{explanation_id}_partial_dependence.png" if top_features else None,
-                    "shap_force": [f"{explanation_id}_shap_force_{i}.png" for i in range(min(5, len(X_sample)))]
-                }
+                'explanation_id': str(uuid.uuid4()),
+                'model_type': type(model).__name__,
+                'timestamp': datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                'feature_names': feature_names,
+                'feature_importance': None,
+                'shap_data': None,
+                'lime_data': None,
+                'pdp_data': None,
+                'prediction_summary': None
             }
             
-            # 保存解释结果
-            _, file_path = self.save_interpretation(explanation_data, explanation_id)
+            # 1. 计算特征重要性
+            feature_importance = self.get_feature_importance(model, X_train, y_train, feature_names)
+            explanation_data['feature_importance'] = feature_importance
             
-            return explanation_data, explanation_id, file_path
+            # 2. 生成SHAP解释
+            try:
+                # 获取SHAP值和摘要数据
+                shap_values, expected_value, explainer, X_sample = self.get_shap_explanation(
+                    model, X_train, feature_names=feature_names, sample_size=n_samples
+                )
+                shap_summary_data = self.get_shap_summary_data(shap_values, X_sample, feature_names)
+                explanation_data['shap_data'] = {
+                    'summary': shap_summary_data,
+                    'expected_value': float(expected_value) if isinstance(expected_value, (int, float)) else expected_value.tolist()
+                }
+            except Exception as e:
+                print(f"生成SHAP解释时出错: {e}")
+            
+            # 3. 生成LIME解释
+            try:
+                lime_exp = self.get_lime_explanation(model, X_train, X_test, instance_idx=0, num_features=10)
+                if lime_exp:
+                    lime_data = self.get_lime_data(lime_exp, feature_names)
+                    explanation_data['lime_data'] = lime_data
+            except Exception as e:
+                print(f"生成LIME解释时出错: {e}")
+            
+            # 4. 生成部分依赖图数据
+            try:
+                # 为最重要的几个特征生成部分依赖图数据
+                if feature_importance:
+                    # 按重要性排序特征
+                    top_features = [item['feature_index'] for item in feature_importance[:3]]
+                    if top_features:  # 确保有特征可以处理
+                        pdp_data = self.get_partial_dependence_data(model, X_train, top_features, feature_names)
+                        explanation_data['pdp_data'] = pdp_data
+            except Exception as e:
+                print(f"生成部分依赖图数据时出错: {e}")
+            
+            # 5. 生成预测摘要
+            if hasattr(model, 'predict'):
+                try:
+                    y_pred = model.predict(X_test)
+                    explanation_data['prediction_summary'] = {
+                        'test_samples': X_test.shape[0],
+                        'prediction_min': float(np.min(y_pred)),
+                        'prediction_max': float(np.max(y_pred)),
+                        'prediction_mean': float(np.mean(y_pred)),
+                        'prediction_std': float(np.std(y_pred))
+                    }
+                except Exception as e:
+                    print(f"生成预测摘要时出错: {e}")
+            
+            return explanation_data
         except Exception as e:
-            print(f"生成模型解释时出错: {e}")
+            print(f"生成模型解释报告时出错: {e}")
             import traceback
             traceback.print_exc()
-            # 返回错误信息
-            error_id = f"error_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{np.random.randint(1000, 9999)}"
-            return {"error": str(e)}, error_id, None
+            return None
 
 class MILPInterpreter:
     """

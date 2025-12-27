@@ -82,6 +82,51 @@ class DataSource(ABC):
             pandas.DataFrame: MILP优化输出数据框
         """
         pass
+    
+    @abstractmethod
+    def get_weather_data(self, location_id, start_date, end_date):
+        """
+        获取天气数据
+        
+        Args:
+            location_id: 位置ID
+            start_date: 开始日期
+            end_date: 结束日期
+            
+        Returns:
+            pandas.DataFrame: 天气数据框
+        """
+        pass
+    
+    @abstractmethod
+    def get_competitor_prices(self, item_id, start_date, end_date):
+        """
+        获取竞争对手价格数据
+        
+        Args:
+            item_id: 商品ID
+            start_date: 开始日期
+            end_date: 结束日期
+            
+        Returns:
+            pandas.DataFrame: 竞争对手价格数据框
+        """
+        pass
+    
+    @abstractmethod
+    def get_macro_economic_data(self, indicator, start_date, end_date):
+        """
+        获取宏观经济指标数据
+        
+        Args:
+            indicator: 指标名称
+            start_date: 开始日期
+            end_date: 结束日期
+            
+        Returns:
+            pandas.DataFrame: 宏观经济指标数据框
+        """
+        pass
 
 
 class CSVDataSource(DataSource):
@@ -105,7 +150,10 @@ class CSVDataSource(DataSource):
             'inventory_daily': 'inventory_daily.csv',
             'purchase_orders': 'purchase_orders.csv',
             'forecast_output': 'forecast_output.csv',
-            'optimal_plan': 'optimal_plan.csv'
+            'optimal_plan': 'optimal_plan.csv',
+            'weather_data': 'weather_data.csv',
+            'competitor_prices': 'competitor_prices.csv',
+            'macro_economic_data': 'macro_economic_data.csv'
         }
     
     def _load_csv(self, table_name):
@@ -151,6 +199,90 @@ class CSVDataSource(DataSource):
     
     def get_optimal_plan(self):
         return self._load_csv('optimal_plan')
+    
+    def get_weather_data(self, location_id, start_date, end_date):
+        try:
+            # 尝试加载CSV文件
+            df = self._load_csv('weather_data')
+            # 过滤数据
+            df['date'] = pd.to_datetime(df['date'])
+            df = df[(df['location_id'] == location_id) & 
+                   (df['date'] >= start_date) & 
+                   (df['date'] <= end_date)]
+            return df
+        except Exception as e:
+            logger.warning(f"无法加载天气数据，生成模拟数据: {e}")
+            # 生成模拟天气数据
+            date_range = pd.date_range(start=start_date, end=end_date)
+            df = pd.DataFrame({
+                'date': date_range,
+                'location_id': location_id,
+                'temperature': np.random.normal(20, 5, len(date_range)),
+                'humidity': np.random.normal(60, 10, len(date_range)),
+                'precipitation': np.random.choice([0, 0.5, 1, 2, 5], len(date_range), p=[0.7, 0.1, 0.1, 0.05, 0.05]),
+                'wind_speed': np.random.normal(10, 3, len(date_range)),
+                'weather_condition': np.random.choice(['sunny', 'cloudy', 'rainy', 'snowy'], len(date_range), p=[0.5, 0.3, 0.15, 0.05])
+            })
+            return df
+    
+    def get_competitor_prices(self, item_id, start_date, end_date):
+        try:
+            # 尝试加载CSV文件
+            df = self._load_csv('competitor_prices')
+            # 过滤数据
+            df['date'] = pd.to_datetime(df['date'])
+            df = df[(df['item_id'] == item_id) & 
+                   (df['date'] >= start_date) & 
+                   (df['date'] <= end_date)]
+            return df
+        except Exception as e:
+            logger.warning(f"无法加载竞争对手价格数据，生成模拟数据: {e}")
+            # 生成模拟竞争对手价格数据
+            date_range = pd.date_range(start=start_date, end=end_date)
+            competitors = ['competitor_A', 'competitor_B', 'competitor_C']
+            data = []
+            for date in date_range:
+                for competitor in competitors:
+                    data.append({
+                        'date': date,
+                        'item_id': item_id,
+                        'competitor': competitor,
+                        'price': np.random.normal(100, 10, 1)[0],
+                        'discount': np.random.choice([0, 0.1, 0.2, 0.3], 1, p=[0.7, 0.2, 0.08, 0.02])[0]
+                    })
+            df = pd.DataFrame(data)
+            return df
+    
+    def get_macro_economic_data(self, indicator, start_date, end_date):
+        try:
+            # 尝试加载CSV文件
+            df = self._load_csv('macro_economic_data')
+            # 过滤数据
+            df['date'] = pd.to_datetime(df['date'])
+            df = df[(df['indicator'] == indicator) & 
+                   (df['date'] >= start_date) & 
+                   (df['date'] <= end_date)]
+            return df
+        except Exception as e:
+            logger.warning(f"无法加载宏观经济数据，生成模拟数据: {e}")
+            # 生成模拟宏观经济数据
+            date_range = pd.date_range(start=start_date, end=end_date, freq='MS')
+            if indicator == 'gdp':
+                values = np.random.normal(100, 2, len(date_range))
+            elif indicator == 'cpi':
+                values = np.random.normal(102, 1, len(date_range))
+            elif indicator == 'unemployment_rate':
+                values = np.random.normal(5, 0.5, len(date_range))
+            else:
+                values = np.random.normal(50, 5, len(date_range))
+            
+            df = pd.DataFrame({
+                'date': date_range,
+                'indicator': indicator,
+                'value': values,
+                'unit': '%' if indicator in ['cpi', 'unemployment_rate'] else 'index'
+            })
+            return df
 
 
 class DatabaseDataSource(DataSource):
@@ -305,7 +437,7 @@ class SimulatedDataSource(DataSource):
     """
     
     def __init__(self):
-        from simulated_data import generate_simulated_data
+        from .simulated_data import generate_simulated_data
         self.generate_simulated_data = generate_simulated_data
     
     def _get_all_data(self):
@@ -338,6 +470,65 @@ class SimulatedDataSource(DataSource):
     
     def get_optimal_plan(self):
         return self._get_all_data()['optimal_plan']
+    
+    def get_weather_data(self, location_id, start_date, end_date):
+        # 生成简单的模拟天气数据
+        import pandas as pd
+        import numpy as np
+        from datetime import datetime, timedelta
+        
+        # 创建日期范围
+        date_range = pd.date_range(start=start_date, end=end_date, freq='D')
+        
+        # 生成模拟数据
+        data = {
+            'date': date_range,
+            'location_id': location_id,
+            'temperature': np.random.normal(20, 5, len(date_range)),
+            'precipitation': np.random.exponential(2, len(date_range)),
+            'humidity': np.random.uniform(40, 90, len(date_range)),
+            'wind_speed': np.random.normal(10, 3, len(date_range))
+        }
+        
+        return pd.DataFrame(data)
+    
+    def get_competitor_prices(self, item_id, start_date, end_date):
+        # 生成简单的模拟竞争对手价格数据
+        import pandas as pd
+        import numpy as np
+        from datetime import datetime, timedelta
+        
+        # 创建日期范围
+        date_range = pd.date_range(start=start_date, end=end_date, freq='D')
+        
+        # 生成模拟数据
+        data = {
+            'date': date_range,
+            'item_id': item_id,
+            'competitor_a_price': np.random.uniform(10, 50, len(date_range)),
+            'competitor_b_price': np.random.uniform(10, 50, len(date_range)),
+            'competitor_c_price': np.random.uniform(10, 50, len(date_range))
+        }
+        
+        return pd.DataFrame(data)
+    
+    def get_macro_economic_data(self, indicator, start_date, end_date):
+        # 生成简单的模拟宏观经济数据
+        import pandas as pd
+        import numpy as np
+        from datetime import datetime, timedelta
+        
+        # 创建日期范围
+        date_range = pd.date_range(start=start_date, end=end_date, freq='D')
+        
+        # 生成模拟数据
+        data = {
+            'date': date_range,
+            'indicator': indicator,
+            'value': np.random.normal(100, 10, len(date_range))
+        }
+        
+        return pd.DataFrame(data)
 
 
 class DataSourceFactory:

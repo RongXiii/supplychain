@@ -168,8 +168,11 @@ class CacheManager:
     
     def _calculate_cache_size(self, value: Any) -> int:
         """计算缓存值的大小（字节）"""
-        if isinstance(value, (pd.DataFrame, np.ndarray)):
+        if isinstance(value, np.ndarray):
             return value.nbytes
+        elif isinstance(value, pd.DataFrame):
+            # 计算DataFrame所有列的nbytes之和
+            return value.memory_usage(deep=True).sum()
         elif isinstance(value, (dict, list)):
             return len(pickle.dumps(value))
         elif isinstance(value, (str, bytes)):

@@ -4,7 +4,9 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 from scipy import stats
 import os
+import logging
 from datetime import datetime
+from typing import Dict, Optional, List
 
 class TestVariant:
     """测试变体类，代表A/B测试中的一个模型或策略"""
@@ -567,3 +569,127 @@ class ABTestManager:
             'num_significant_results': sum(1 for r in self.test_results.values() if r['significant']),
             'total_comparisons': len(self.test_results)
         }
+
+# A/B测试配置管理器
+class ABTestConfigManager:
+    """
+    A/B测试配置管理器，用于管理多个A/B测试实验
+    """
+    def __init__(self):
+        self.logger = logging.getLogger(__name__)
+        self.experiments = {}
+        self.config_file = 'config/ab_test_config.json'
+        
+        # 加载配置
+        self._load_config()
+        self.logger.info("A/B测试配置管理器初始化")
+    
+    def _load_config(self) -> None:
+        """
+        加载A/B测试配置
+        """
+        try:
+            if os.path.exists(self.config_file):
+                with open(self.config_file, 'r') as f:
+                    self.config = json.load(f)
+            else:
+                self.config = {
+                    'active_experiments': [],
+                    'experiment_configs': {}
+                }
+        except Exception as e:
+            self.logger.error(f"加载A/B测试配置失败: {e}")
+            self.config = {
+                'active_experiments': [],
+                'experiment_configs': {}
+            }
+    
+    def _save_config(self) -> None:
+        """
+        保存A/B测试配置
+        """
+        try:
+            os.makedirs(os.path.dirname(self.config_file), exist_ok=True)
+            with open(self.config_file, 'w') as f:
+                json.dump(self.config, f, indent=2, default=str)
+        except Exception as e:
+            self.logger.error(f"保存A/B测试配置失败: {e}")
+    
+    def create_experiment(self, experiment_id: str, config: Dict) -> ABTestManager:
+        """
+        创建新的A/B测试实验
+        
+        Args:
+            experiment_id: 实验ID
+            config: 实验配置
+            
+        Returns:
+            A/B测试管理器实例
+        """
+        if experiment_id in self.experiments:
+            self.logger.warning(f"实验 {experiment_id} 已存在")
+            return self.experiments[experiment_id]
+        
+        # 创建实验
+        ab_test_manager = ABTestManager(experiment_id, config)
+        self.experiments[experiment_id] = ab_test_manager
+        
+        # 更新配置
+        if experiment_id not in self.config['active_experiments']:
+            self.config['active_experiments'].append(experiment_id)
+        
+        self.config['experiment_configs'][experiment_id] = config
+        self._save_config()
+        
+        self.logger.info(f"创建新实验: experiment_id={experiment_id}")
+        return ab_test_manager
+    
+    def get_experiment(self, experiment_id: str) -> Optional[ABTestManager]:
+        """
+        获取A/B测试实验实例
+        
+        Args:
+            experiment_id: 实验ID
+            
+        Returns:
+            A/B测试管理器实例或None
+        """
+        return self.experiments.get(experiment_id)
+    
+    def list_active_experiments(self) -> List[str]:
+        """
+        获取所有活跃的实验ID
+        
+        Returns:
+            活跃实验ID列表
+        """
+        return self.config['active_experiments']
+    
+    def end_experiment(self, experiment_id: str) -> Dict:
+        """
+        结束指定的A/B测试实验
+        
+        Args:
+            experiment_id: 实验ID
+            
+        Returns:
+            实验最终结果
+        """
+        if experiment_id not in self.experiments:
+            raise ValueError(f"实验不存在: {experiment_id}")
+        
+        ab_test_manager = self.experiments[experiment_id]
+        final_results = ab_test_manager.end_experiment()
+        
+        # 从活跃实验列表中移除
+        if experiment_id in self.config['active_experiments']:
+            self.config['active_experiments'].remove(experiment_id)
+        
+        # 保存配置
+        self._save_config()
+        
+        # 从内存中移除实验实例
+        del self.experiments[experiment_id]
+        
+        self.logger.info(f"结束实验: experiment_id={experiment_id}")
+        return final_results

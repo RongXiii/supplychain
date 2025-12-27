@@ -44,7 +44,9 @@ class DataProcessor:
             'rolling_features': True,
             'interaction_features': False,
             'polynomial_features': False,
-            'embedding_features': False
+            'embedding_features': False,
+            'external_features': True,  # 外部特征集成
+            'dynamic_feature_selection': True  # 动态特征选择
         }
         
         # 特征工程参数
@@ -53,7 +55,11 @@ class DataProcessor:
             'rolling_windows': [7, 14, 30, 60],
             'rolling_functions': ['mean', 'median', 'std', 'min', 'max'],
             'polynomial_degree': 2,
-            'interaction_depth': 2
+            'interaction_depth': 2,
+            # 动态特征选择参数
+            'feature_selection_method': 'mutual_info',  # 可选: mutual_info, f_regression
+            'top_k_features': 20,  # 保留的特征数量
+            'min_importance_threshold': 0.0  # 特征重要性阈值
         }
         
         # 并行执行器缓存
@@ -61,6 +67,36 @@ class DataProcessor:
         
         self.logger.info(f"DataProcessor initialized with parallel_mode={parallel_mode}, max_workers={self.max_workers}")
         
+    def _get_data_source(self):
+        """
+        获取数据源实例
+        
+        Returns:
+            数据源实例
+        """
+        # 首先检查环境变量中是否配置了数据源类型
+        data_source_type = os.getenv("DATA_SOURCE_TYPE", "csv")
+        
+        # 配置数据源参数
+        if data_source_type == "csv":
+            data_source_config = {
+                'data_dir': self.data_dir
+            }
+        elif data_source_type == "database":
+            data_source_config = {
+                'connection_string': os.getenv("DATABASE_CONNECTION_STRING", "")
+            }
+        elif data_source_type == "api":
+            data_source_config = {
+                'base_url': os.getenv("API_BASE_URL", ""),
+                'headers': {"Authorization": f"Bearer {os.getenv('API_TOKEN', '')}"}
+            }
+        else:
+            data_source_config = {}
+        
+        # 创建数据源实例
+        return self.data_source_factory.create_data_source(data_source_type, data_source_config)
+    
     def load_data(self, table_name: str, cache: bool = False, cache_expire: int = 3600) -> pd.DataFrame:
         """
         加载数据文件，支持多种数据源
@@ -76,29 +112,8 @@ class DataProcessor:
         start_time = datetime.now()
         
         try:
-            # 尝试从配置的数据源获取数据
-            # 首先检查环境变量中是否配置了数据源类型
-            data_source_type = os.getenv("DATA_SOURCE_TYPE", "csv")
-            
-            # 配置数据源参数
-            if data_source_type == "csv":
-                data_source_config = {
-                    'data_dir': self.data_dir
-                }
-            elif data_source_type == "database":
-                data_source_config = {
-                    'connection_string': os.getenv("DATABASE_CONNECTION_STRING", "")
-                }
-            elif data_source_type == "api":
-                data_source_config = {
-                    'base_url': os.getenv("API_BASE_URL", ""),
-                    'headers': {"Authorization": f"Bearer {os.getenv('API_TOKEN', '')}"}
-                }
-            else:
-                data_source_config = {}
-            
-            # 创建数据源实例
-            data_source = self.data_source_factory.create_data_source(data_source_type, data_source_config)
+            # 获取数据源实例
+            data_source = self._get_data_source()
             
             # 根据表名获取对应的数据
             if table_name == "items.csv" or table_name == "items":
@@ -241,13 +256,14 @@ class DataProcessor:
         
         return df_copy
     
-    def _automated_feature_engineering(self, df, feature_config):
+    def _automated_feature_engineering(self, df, feature_config, target_column=None):
         """
         自动化特征工程
         
         Args:
             df: 数据框
             feature_config: 特征工程配置
+            target_column: 目标列名，如果为None则使用最后一列
             
         Returns:
             生成特征后的数据框
@@ -255,25 +271,359 @@ class DataProcessor:
         # 复制数据以避免修改原始数据
         df_copy = df.copy()
         
+        # 使用字典存储所有新特征，最后一次性添加，减少DataFrame碎片化
+        new_features = {}
+        
         # 添加时间特征
         if feature_config['time_features'] and hasattr(df_copy.index, 'month'):
-            df_copy = self._add_time_features(df_copy)
+            time_features = {
+                'month': df_copy.index.month,
+                'quarter': df_copy.index.quarter,
+                'year': df_copy.index.year,
+                'day_of_week': df_copy.index.dayofweek,
+                'day_of_month': df_copy.index.day,
+                'is_weekend': df_copy.index.dayofweek.isin([5, 6]).astype(int),
+                'is_month_start': df_copy.index.is_month_start.astype(int),
+                'is_month_end': df_copy.index.is_month_end.astype(int),
+                'sin_month': np.sin(2 * np.pi * df_copy.index.month / 12),
+                'cos_month': np.cos(2 * np.pi * df_copy.index.month / 12),
+                'sin_day_of_week': np.sin(2 * np.pi * df_copy.index.dayofweek / 7),
+                'cos_day_of_week': np.cos(2 * np.pi * df_copy.index.dayofweek / 7)
+            }
+            new_features.update(time_features)
         
         # 添加滞后特征
         if feature_config['lag_features']:
-            df_copy = self._add_lag_features(df_copy)
+            numeric_cols = df_copy.select_dtypes(include=[np.number]).columns
+            for col in numeric_cols:
+                for lag in self.feature_params['lag_values']:
+                    new_features[f'{col}_lag_{lag}'] = df_copy[col].shift(lag)
         
-        # 添加滚动统计特征
+        # 添加所有新特征
+        if new_features:
+            df_copy = df_copy.assign(**new_features)
+            # 移除包含NaN的行（由于滞后操作产生）
+            df_copy = df_copy.dropna()
+        
+        # 添加滚动统计特征 - 单独处理，因为需要基于之前添加的特征
         if feature_config['rolling_features']:
-            df_copy = self._add_rolling_features(df_copy)
+            rolling_features = {}
+            numeric_cols = df_copy.select_dtypes(include=[np.number]).columns
+            for col in numeric_cols:
+                for window in self.feature_params['rolling_windows']:
+                    for func in self.feature_params['rolling_functions']:
+                        rolling_features[f'{col}_roll_{window}_{func}'] = df_copy[col].rolling(window=window).agg(func)
+            
+            if rolling_features:
+                df_copy = df_copy.assign(**rolling_features)
+                df_copy = df_copy.dropna()
         
         # 添加多项式特征
         if feature_config['polynomial_features']:
-            df_copy = self._add_polynomial_features(df_copy)
+            poly_features = {}
+            numeric_cols = df_copy.select_dtypes(include=[np.number]).columns
+            for col in numeric_cols:
+                for degree in range(2, self.feature_params['polynomial_degree'] + 1):
+                    poly_features[f'{col}_poly_{degree}'] = df_copy[col] ** degree
+            
+            if poly_features:
+                df_copy = df_copy.assign(**poly_features)
         
         # 添加交互特征
         if feature_config['interaction_features']:
-            df_copy = self._add_interaction_features(df_copy)
+            numeric_cols = df_copy.select_dtypes(include=[np.number]).columns
+            col_pairs = list(itertools.combinations(numeric_cols, 2))[:self.feature_params['max_interaction_pairs']]
+            
+            interaction_features = {}
+            for col1, col2 in col_pairs:
+                interaction_features[f'{col1}_x_{col2}'] = df_copy[col1] * df_copy[col2]
+            
+            if interaction_features:
+                df_copy = df_copy.assign(**interaction_features)
+        
+        # 添加外部特征
+        if feature_config['external_features']:
+            df_copy = self._add_external_features(df_copy)
+        
+        # 动态特征选择
+        if feature_config['dynamic_feature_selection']:
+            # 使用指定的目标列或默认使用最后一列
+            if len(df_copy.columns) > 1:
+                if target_column is None:
+                    target_column = df_copy.columns[-1]
+                df_copy, selected_features = self._dynamic_feature_selection(df_copy, target_column)
+                self.logger.info(f"动态特征选择完成，保留 {len(selected_features)} 个特征: {selected_features}")
+        
+        return df_copy
+    
+    def _dynamic_feature_selection(self, df, target_column):
+        """
+        动态特征选择：基于互信息或F统计量自动选择最优特征集
+        
+        Args:
+            df: 包含特征和目标列的数据框
+            target_column: 目标列名
+            
+        Returns:
+            selected_df: 只包含选择后特征的数据框
+            selected_features: 选择的特征列表
+        """
+        # 分离特征和目标
+        X = df.drop(columns=[target_column])
+        y = df[target_column]
+        
+        # 仅保留数值类型的列
+        X = X.select_dtypes(include=['number'])
+        
+        # 处理可能的缺失值
+        X = X.fillna(0)
+        y = y.fillna(0)
+        
+        # 特征选择方法
+        method = self.feature_params['feature_selection_method']
+        top_k = min(self.feature_params['top_k_features'], len(X.columns))
+        
+        if method == 'mutual_info':
+            # 基于互信息的特征选择
+            selector = SelectKBest(score_func=mutual_info_regression, k=top_k)
+        elif method == 'f_regression':
+            # 基于F统计量的特征选择
+            selector = SelectKBest(score_func=f_regression, k=top_k)
+        else:
+            self.logger.warning(f"未知的特征选择方法: {method}，使用默认的mutual_info")
+            selector = SelectKBest(score_func=mutual_info_regression, k=top_k)
+        
+        # 训练选择器并转换数据
+        X_selected = selector.fit_transform(X, y)
+        
+        # 获取选择的特征
+        selected_feature_indices = selector.get_support(indices=True)
+        selected_features = list(X.columns[selected_feature_indices])
+        
+        # 重建数据框，包含目标列
+        selected_df = pd.DataFrame(X_selected, index=X.index, columns=selected_features)
+        selected_df[target_column] = y
+        
+        return selected_df, selected_features
+    
+    def calculate_feature_importance(self, df, target_column, method='mutual_info'):
+        """
+        计算特征重要性
+        
+        Args:
+            df: 包含特征和目标列的数据框
+            target_column: 目标列名
+            method: 特征重要性计算方法，可选: mutual_info, f_regression
+            
+        Returns:
+            feature_importance: 特征重要性字典，键为特征名，值为重要性得分
+        """
+        # 分离特征和目标
+        X = df.drop(columns=[target_column])
+        y = df[target_column]
+        
+        # 处理可能的缺失值
+        X = X.fillna(0)
+        y = y.fillna(0)
+        
+        # 只保留数值类型的列
+        X = X.select_dtypes(include=['number'])
+        
+        # 计算特征重要性
+        if method == 'mutual_info':
+            importance_scores = mutual_info_regression(X, y)
+        elif method == 'f_regression':
+            _, p_values = f_regression(X, y)
+            # 将p值转换为重要性得分（p值越小，得分越高）
+            importance_scores = -np.log10(p_values)
+        else:
+            self.logger.warning(f"未知的特征重要性计算方法: {method}，使用默认的mutual_info")
+            importance_scores = mutual_info_regression(X, y)
+        
+        # 创建特征重要性字典
+        feature_importance = {}
+        for feature, score in zip(X.columns, importance_scores):
+            if feature != target_column:
+                feature_importance[feature] = score
+        
+        # 按重要性排序
+        feature_importance = dict(sorted(feature_importance.items(), key=lambda x: x[1], reverse=True))
+        
+        return feature_importance
+    
+    def update_feature_set(self, df, target_column, feature_importance=None):
+        """
+        定期更新特征集，基于最新的特征重要性
+        
+        Args:
+            df: 包含特征和目标列的数据框
+            target_column: 目标列名
+            feature_importance: 预计算的特征重要性，如果为None则自动计算
+            
+        Returns:
+            updated_features: 更新后的特征列表
+        """
+        if feature_importance is None:
+            feature_importance = self.calculate_feature_importance(df, target_column)
+        
+        # 应用特征重要性阈值
+        min_threshold = self.feature_params['min_importance_threshold']
+        updated_features = [feature for feature, score in feature_importance.items() if score >= min_threshold]
+        
+        # 确保不超过最大特征数量
+        top_k = self.feature_params['top_k_features']
+        updated_features = updated_features[:top_k]
+        
+        self.logger.info(f"特征集已更新，当前特征数量: {len(updated_features)}")
+        
+        return updated_features
+    
+    def visualize_feature_importance(self, feature_importance, output_path=None):
+        """
+        可视化特征贡献度
+        
+        Args:
+            feature_importance: 特征重要性字典
+            output_path: 可视化结果保存路径，如果为None则不保存
+            
+        Returns:
+            None
+        """
+        try:
+            import matplotlib.pyplot as plt
+            import seaborn as sns
+            
+            # 设置中文字体（如果需要）
+            plt.rcParams['font.sans-serif'] = ['SimHei']  # 中文显示
+            plt.rcParams['axes.unicode_minus'] = False    # 负号显示
+            
+            # 准备数据
+            features = list(feature_importance.keys())
+            scores = list(feature_importance.values())
+            
+            # 绘制条形图
+            plt.figure(figsize=(12, 8))
+            sns.barplot(x=scores, y=features, palette='viridis')
+            plt.title('特征重要性分布', fontsize=16)
+            plt.xlabel('重要性得分', fontsize=14)
+            plt.ylabel('特征', fontsize=14)
+            plt.tight_layout()
+            
+            # 保存可视化结果
+            if output_path:
+                os.makedirs(os.path.dirname(output_path), exist_ok=True)
+                plt.savefig(output_path, dpi=300)
+                self.logger.info(f"特征重要性可视化已保存到: {output_path}")
+            else:
+                plt.show()
+                
+            plt.close()
+        except ImportError as e:
+            self.logger.warning(f"无法导入可视化库: {e}，跳过可视化步骤")
+        except Exception as e:
+            self.logger.error(f"特征重要性可视化失败: {e}")
+    
+    def monitor_feature_importance(self, df, target_column, output_path=None):
+        """
+        特征重要性监控：计算、更新和可视化特征重要性
+        
+        Args:
+            df: 包含特征和目标列的数据框
+            target_column: 目标列名
+            output_path: 可视化结果保存路径
+            
+        Returns:
+            feature_importance: 特征重要性字典
+            updated_features: 更新后的特征列表
+        """
+        # 计算特征重要性
+        feature_importance = self.calculate_feature_importance(df, target_column)
+        
+        # 更新特征集
+        updated_features = self.update_feature_set(df, target_column, feature_importance)
+        
+        # 可视化特征重要性
+        self.visualize_feature_importance(feature_importance, output_path)
+        
+        return feature_importance, updated_features
+    
+    def _add_external_features(self, df):
+        """
+        添加外部特征，包括天气数据、竞争对手价格和宏观经济指标
+        
+        Args:
+            df: 主数据框
+            
+        Returns:
+            添加外部特征后的数据框
+        """
+        df_copy = df.copy()
+        
+        try:
+            # 获取数据源实例
+            data_source = self._get_data_source()
+            
+            # 确定日期范围
+            start_date = df_copy.index.min()
+            end_date = df_copy.index.max()
+            
+            # 获取天气数据（示例：假设所有位置使用同一个天气站的数据）
+            weather_data = data_source.get_weather_data(
+                location_id='all',
+                start_date=start_date,
+                end_date=end_date
+            )
+            
+            # 将天气数据与主数据合并
+            if not weather_data.empty:
+                # 将weather_data的日期列设置为索引
+                if 'date' in weather_data.columns:
+                    weather_data.set_index('date', inplace=True)
+                df_copy = df_copy.merge(weather_data, left_index=True, right_index=True, how='left')
+            
+            # 获取竞争对手价格数据
+            competitor_prices = data_source.get_competitor_prices(
+                product_id='all',
+                start_date=start_date,
+                end_date=end_date
+            )
+            
+            # 将竞争对手价格数据与主数据合并
+            if not competitor_prices.empty:
+                if 'date' in competitor_prices.columns:
+                    competitor_prices.set_index('date', inplace=True)
+                # 如果有product_id列，可能需要更复杂的合并逻辑
+                if 'product_id' in competitor_prices.columns:
+                    # 假设主数据有product_id列
+                    if 'product_id' in df_copy.columns:
+                        df_copy = df_copy.merge(competitor_prices, 
+                                               left_on=['date', 'product_id'], 
+                                               right_on=['date', 'product_id'], 
+                                               how='left')
+                else:
+                    df_copy = df_copy.merge(competitor_prices, left_index=True, right_index=True, how='left')
+            
+            # 获取宏观经济数据
+            macro_data = data_source.get_macro_economic_data(
+                indicator_ids=['GDP', 'CPI', 'interest_rate'],
+                start_date=start_date,
+                end_date=end_date
+            )
+            
+            # 将宏观经济数据与主数据合并
+            if not macro_data.empty:
+                if 'date' in macro_data.columns:
+                    macro_data.set_index('date', inplace=True)
+                df_copy = df_copy.merge(macro_data, left_index=True, right_index=True, how='left')
+            
+            # 填充外部特征中的缺失值
+            numeric_external_cols = df_copy.select_dtypes(include=[np.number]).columns.difference(df.columns)
+            df_copy[numeric_external_cols] = df_copy[numeric_external_cols].fillna(method='ffill').fillna(method='bfill')
+            
+            self.logger.info(f"Successfully added external features. New features: {list(numeric_external_cols)}")
+            
+        except Exception as e:
+            self.logger.warning(f"Failed to add external features: {e}")
         
         return df_copy
     
@@ -287,6 +637,7 @@ class DataProcessor:
         Returns:
             添加时间特征后的数据框
         """
+        import holidays
         df_copy = df.copy()
         
         # 基本时间特征
@@ -304,6 +655,34 @@ class DataProcessor:
         df_copy['cos_month'] = np.cos(2 * np.pi * df_copy['month'] / 12)
         df_copy['sin_day_of_week'] = np.sin(2 * np.pi * df_copy['day_of_week'] / 7)
         df_copy['cos_day_of_week'] = np.cos(2 * np.pi * df_copy['day_of_week'] / 7)
+        
+        # 添加节假日特征
+        try:
+            # 中国节假日
+            cn_holidays = holidays.CountryHoliday('CN')
+            df_copy['is_holiday'] = df_copy.index.map(lambda x: 1 if x in cn_holidays else 0)
+            df_copy['holiday_name'] = df_copy.index.map(lambda x: cn_holidays.get(x, ''))
+            
+            # 国际节假日
+            int_holidays = holidays.CountryHoliday('US')
+            df_copy['is_international_holiday'] = df_copy.index.map(lambda x: 1 if x in int_holidays else 0)
+        except Exception as e:
+            self.logger.warning(f"无法加载节假日数据: {e}")
+            df_copy['is_holiday'] = 0
+            df_copy['holiday_name'] = ''
+            df_copy['is_international_holiday'] = 0
+        
+        # 添加时间衰减特征（近期数据权重更高）
+        df_copy['days_since_start'] = (df_copy.index - df_copy.index.min()).days
+        df_copy['time_decay'] = np.exp(-0.01 * df_copy['days_since_start'])
+        
+        # 添加趋势特征
+        for window in [7, 14, 30]:
+            if len(df_copy) >= window + 1:
+                # 计算移动平均线
+                df_copy[f'trend_{window}d'] = df_copy.index.to_series().rolling(window=window).apply(
+                    lambda x: np.polyfit(range(len(x)), x.map(lambda d: d.dayofyear), 1)[0], raw=False
+                )
         
         return df_copy
     

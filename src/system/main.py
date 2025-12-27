@@ -336,13 +336,14 @@ class ReplenishmentSystem:
             'safety_stock': safety_stock
         }
     
-    def run_forecast(self, product_data, product_id):
+    def run_forecast(self, product_data, product_id, steps=1):
         """
         运行预测流程，包括数据预处理、模型选择和预测
         
         Args:
             product_data: 产品历史数据
             product_id: 产品ID
+            steps: 预测步数
             
         Returns:
             forecast_result: 预测结果，包括模型信息和预测值
@@ -394,7 +395,7 @@ class ReplenishmentSystem:
         self.mlops_engine.save_model(product_id, best_model, model_name, metrics=error_metrics)
         
         # 进行未来预测
-        future_predictions = self.model_selector.forecast(best_model, model_name, X_test)
+        future_predictions = self.model_selector.forecast(best_model, model_name, X_test, steps=steps)
         
         return {
             'product_id': product_id,
@@ -404,6 +405,125 @@ class ReplenishmentSystem:
             'error_metrics': error_metrics,
             'predictions': future_predictions
         }
+    
+    def batch_run_forecast(self, products_data, steps=1, parallel=True, n_jobs=-1):
+        """
+        批量运行预测流程，并行处理多个产品的预测请求
+        
+        Args:
+            products_data: 产品数据字典，格式为{product_id: product_data}
+            steps: 预测步数
+            parallel: 是否使用并行处理
+            n_jobs: 并行任务数，-1表示使用所有可用CPU核心
+            
+        Returns:
+            batch_forecast_results: 批量预测结果，格式为{product_id: forecast_result}
+        """
+        import time
+        start_time = time.time()
+        
+        # 1. 预处理所有产品数据并选择模型
+        product_models = {}
+        individual_results = {}
+        
+        print(f"开始批量预测 {len(products_data)} 个产品...")
+        
+        # 为每个产品预处理数据并选择/加载模型
+        for product_id, product_data in products_data.items():
+            try:
+                # 获取产品数据中的位置信息
+                location_id = product_data.get('location_id', 1)
+                
+                # 预处理数据
+                processed_data = self.data_processor.preprocess_data(product_data)
+                
+                # 分割训练集和测试集
+                X_train, X_test, y_train, y_test = self.data_processor.split_data(processed_data)
+                
+                # 漂移检测：比较训练数据和测试数据的分布
+                if len(y_train) > 10 and len(y_test) > 10:
+                    drift_result = self.mlops_engine.detect_drift(y_train, y_test, product_id)
+                    print(f"产品 {product_id} 漂移检测结果: {drift_result}")
+                
+                # 更新SKU×仓库的特征
+                demand_series = product_data.get('demand_series', y_train + y_test)
+                self.update_sku_location_features(product_id, location_id, demand_series)
+                
+                # 尝试加载已保存的模型
+                model, model_name, metadata = self.model_selector.load_model(product_id)
+                
+                if model is None:
+                    # 如果没有保存的模型，选择最佳模型
+                    model_tag = self.get_model_selection_tag(product_id, location_id)
+                    model, model_name, best_score = self.model_selector.select_best_model(X_train, y_train, product_id, model_tag=model_tag)
+                else:
+                    # 使用加载的模型
+                    best_score = metadata.get('score', 0)
+                
+                # 保存模型信息
+                self.models[product_id] = {
+                    'model': model,
+                    'model_name': model_name,
+                    'score': best_score
+                }
+                
+                # 准备批量预测所需的模型信息
+                product_models[product_id] = (model, model_name, X_test)
+                
+            except Exception as e:
+                print(f"产品 {product_id} 预处理失败: {e}")
+                individual_results[product_id] = {
+                    'error': str(e)
+                }
+        
+        # 2. 批量预测
+        batch_forecast = self.model_selector.batch_forecast(product_models, steps=steps, parallel=parallel, n_jobs=n_jobs)
+        
+        # 3. 处理每个产品的预测结果
+        for product_id, predictions in batch_forecast.items():
+            try:
+                model_info = self.models[product_id]
+                
+                # 获取测试数据（这里需要重新获取，因为之前没有保存）
+                product_data = products_data[product_id]
+                processed_data = self.data_processor.preprocess_data(product_data)
+                X_train, X_test, y_train, y_test = self.data_processor.split_data(processed_data)
+                
+                # 在测试集上评估模型
+                test_metrics = self.model_selector.evaluate_model(model_info['model'], model_info['model_name'], X_test, y_test)
+                
+                # 计算误差指标
+                if model_info['model_name'] in ['arima', 'holt_winters']:
+                    y_pred = self.model_selector.predict(model_info['model'], model_info['model_name'], y_test)
+                else:
+                    y_pred = self.model_selector.predict(model_info['model'], model_info['model_name'], X_test)
+                error_metrics = self.mlops_engine.calculate_error_metrics(y_test, y_pred, product_id)
+                
+                # 更新模型信息
+                model_info['metrics'] = test_metrics
+                model_info['error_metrics'] = error_metrics
+                
+                # 使用MLOps引擎保存模型
+                self.mlops_engine.save_model(product_id, model_info['model'], model_info['model_name'], metrics=error_metrics)
+                
+                # 保存预测结果
+                individual_results[product_id] = {
+                    'product_id': product_id,
+                    'model_name': model_info['model_name'],
+                    'model_score': model_info['score'],
+                    'test_metrics': test_metrics,
+                    'error_metrics': error_metrics,
+                    'predictions': predictions
+                }
+            except Exception as e:
+                print(f"产品 {product_id} 结果处理失败: {e}")
+                individual_results[product_id] = {
+                    'error': str(e)
+                }
+        
+        print(f"批量预测完成，总耗时: {time.time() - start_time:.2f}秒，产品数: {len(products_data)}")
+        
+        return individual_results
     
     def run_optimization(self, forecast_results, inventory_data, lead_times, costs, constraints, warehouse_inventory=None, transfer_costs=None, discount_tiers=None):
         """

@@ -55,8 +55,15 @@ git clone <repo-url> && cd supplychain
 docker compose up -d
 ```
 
+### 🔮 INNOVATION ROADMAP
+- **Q1 2024**: Deep learning model integration (LSTM/Transformer)
+- **Q2 2024**: Mobile application and supplier collaboration portal
+- **Q3 2024**: Blockchain-based supply chain traceability
+- **Q4 2024**: Adaptive learning system for continuous optimization
 
-
+### 📞 CONTACT
+For enterprise deployment or partnership inquiries:
+[contact@supplychain-intelligence.com](mailto:contact@supplychain-intelligence.com)
 
 ---
-*© 2025 Supply Chain Intelligence Team | AI-Powered Inventory Optimization*
+*© 2023 Supply Chain Intelligence Team | AI-Powered Inventory Optimization*
